@@ -25,8 +25,9 @@ public class TetrisView extends View {
     private static final int BOMB_CHANCE_PERCENT = 6;
     private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
 
+    // Tutti i pezzi speciali sono 1x1.
     private static final int[][] SPECIAL_SHAPE = {
-            {1, 0}, {2, 0}, {1, 1}, {2, 1}
+            {0, 0}
     };
 
     private static final int[][][][] SHAPES = {
@@ -86,6 +87,7 @@ public class TetrisView extends View {
 
     private static final int DRILL_COLOR = Color.rgb(255, 221, 71);
     private static final int BOMB_COLOR = Color.rgb(255, 67, 54);
+    private static final int COLOR_BOMB_COLOR = Color.rgb(115, 210, 255);
 
     private final int[][] board = new int[ROWS][COLS];
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -185,14 +187,24 @@ public class TetrisView extends View {
             return;
         }
 
+        if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+            currentType = 0;
+            pieceX = COLS / 2;
+            pieceY = 0;
+            if (board[pieceY][pieceX] != 0) {
+                if (specialKind == SPECIAL_BOMB) {
+                    explodeArea(pieceX, pieceY);
+                } else {
+                    explodeColor(pieceX, pieceY);
+                }
+                spawnPiece();
+            }
+            return;
+        }
+
         pieceX = 3;
         pieceY = -1;
-
-        if (specialKind == SPECIAL_NORMAL) {
-            currentType = random.nextInt(7);
-        } else {
-            currentType = 0;
-        }
+        currentType = random.nextInt(7);
 
         if (!canPlace(pieceX, pieceY, rotation)) {
             gameOver = true;
@@ -205,7 +217,7 @@ public class TetrisView extends View {
     }
 
     private int[][] currentBlocks(int rot) {
-        if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+        if (specialKind != SPECIAL_NORMAL) {
             return SPECIAL_SHAPE;
         }
         return SHAPES[currentType][rot];
@@ -289,7 +301,6 @@ public class TetrisView extends View {
             score += distance;
             if (!activated && (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB)) {
                 if (!activateSpecialIfTouching()) {
-                    // Se arriva al fondo senza toccare blocchi, il pezzo speciale si consuma.
                     score += 5;
                     spawnPiece();
                 }
@@ -329,7 +340,6 @@ public class TetrisView extends View {
             }
         } else {
             if (!activateSpecialIfTouching()) {
-                // Fondo libero: il pezzo scompare senza modificare il campo.
                 score += 5;
                 spawnPiece();
             }
@@ -387,7 +397,7 @@ public class TetrisView extends View {
             }
         }
         score += 40 + removed * 12;
-        // Nessuna gravita qui: il vuoto resta e crea davvero un buco nel muro.
+        // La bomba normale lascia il buco: nessuna gravita immediata.
     }
 
     private void explodeColor(int contactCol, int contactRow) {
@@ -508,7 +518,9 @@ public class TetrisView extends View {
         float header = dp(78);
         float controls = dp(104);
         float usableHeight = Math.max(dp(200), height - header - controls - margin * 2);
-        cellSize = Math.min((width - margin * 2) / COLS, usableHeight / ROWS);
+
+        float originalCellSize = Math.min((width - margin * 2) / COLS, usableHeight / ROWS);
+        cellSize = originalCellSize * 0.90f;
         boardLeft = (width - cellSize * COLS) / 2f;
         boardTop = header;
 
@@ -585,28 +597,17 @@ public class TetrisView extends View {
         }
 
         if (specialKind == SPECIAL_BOMB) {
-            for (int[] block : SPECIAL_SHAPE) {
-                int x = pieceX + block[0];
-                int y = pieceY + block[1];
-                if (y >= 0) {
-                    drawCell(canvas, x, y, BOMB_COLOR);
-                    drawSymbol(canvas, x, y, "X", Color.WHITE);
-                }
+            if (pieceY >= 0 && pieceY < ROWS) {
+                drawCell(canvas, pieceX, pieceY, BOMB_COLOR);
+                drawSymbol(canvas, pieceX, pieceY, "X", Color.WHITE);
             }
             return;
         }
 
         if (specialKind == SPECIAL_COLOR_BOMB) {
-            int index = 0;
-            for (int[] block : SPECIAL_SHAPE) {
-                int x = pieceX + block[0];
-                int y = pieceY + block[1];
-                if (y >= 0) {
-                    int color = COLORS[(index * 2 + 1) % COLORS.length];
-                    drawCell(canvas, x, y, color);
-                    drawSymbol(canvas, x, y, "C", Color.WHITE);
-                }
-                index++;
+            if (pieceY >= 0 && pieceY < ROWS) {
+                drawCell(canvas, pieceX, pieceY, COLOR_BOMB_COLOR);
+                drawSymbol(canvas, pieceX, pieceY, "C", Color.WHITE);
             }
             return;
         }
@@ -679,13 +680,13 @@ public class TetrisView extends View {
 
             if (specialKind == SPECIAL_DRILL) {
                 paint.setColor(DRILL_COLOR);
-                canvas.drawText("PERFORATORE", getWidth() / 2f, top - dp(6), paint);
+                canvas.drawText("PERFORATORE 1 x 1", getWidth() / 2f, top - dp(6), paint);
             } else if (specialKind == SPECIAL_BOMB) {
                 paint.setColor(BOMB_COLOR);
-                canvas.drawText("BOMBA - ESPLOSIONE 3 x 3", getWidth() / 2f, top - dp(6), paint);
+                canvas.drawText("BOMBA 1 x 1 - ESPLOSIONE 3 x 3", getWidth() / 2f, top - dp(6), paint);
             } else {
-                paint.setColor(Color.rgb(115, 210, 255));
-                canvas.drawText("BOMBA COLORE - ELIMINA COLORE", getWidth() / 2f, top - dp(6), paint);
+                paint.setColor(COLOR_BOMB_COLOR);
+                canvas.drawText("BOMBA COLORE 1 x 1", getWidth() / 2f, top - dp(6), paint);
             }
 
             paint.setFakeBoldText(false);
