@@ -15,7 +15,19 @@ import java.util.Random;
 public class TetrisView extends View {
     private static final int COLS = 10;
     private static final int ROWS = 20;
+
+    private static final int SPECIAL_NORMAL = 0;
+    private static final int SPECIAL_DRILL = 1;
+    private static final int SPECIAL_BOMB = 2;
+    private static final int SPECIAL_COLOR_BOMB = 3;
+
     private static final int DRILL_CHANCE_PERCENT = 9;
+    private static final int BOMB_CHANCE_PERCENT = 6;
+    private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
+
+    private static final int[][] SPECIAL_SHAPE = {
+            {1, 0}, {2, 0}, {1, 1}, {2, 1}
+    };
 
     private static final int[][][][] SHAPES = {
             { // I
@@ -63,14 +75,17 @@ public class TetrisView extends View {
     };
 
     private static final int[] COLORS = {
-            Color.rgb(73, 216, 230),  // I
-            Color.rgb(245, 211, 67),  // O
-            Color.rgb(181, 92, 230),  // T
-            Color.rgb(97, 205, 92),   // S
-            Color.rgb(239, 79, 79),   // Z
-            Color.rgb(69, 115, 230),  // J
-            Color.rgb(241, 145, 53)   // L
+            Color.rgb(54, 220, 238),   // I - ciano
+            Color.rgb(255, 213, 55),   // O - giallo
+            Color.rgb(181, 82, 235),   // T - viola
+            Color.rgb(82, 211, 88),    // S - verde
+            Color.rgb(244, 70, 70),    // Z - rosso
+            Color.rgb(61, 111, 239),   // J - blu
+            Color.rgb(255, 145, 43)    // L - arancione
     };
+
+    private static final int DRILL_COLOR = Color.rgb(255, 221, 71);
+    private static final int BOMB_COLOR = Color.rgb(255, 67, 54);
 
     private final int[][] board = new int[ROWS][COLS];
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -81,7 +96,7 @@ public class TetrisView extends View {
     private int rotation;
     private int pieceX;
     private int pieceY;
-    private boolean drillPiece;
+    private int specialKind;
     private boolean gameOver;
 
     private int score;
@@ -107,8 +122,10 @@ public class TetrisView extends View {
                 return;
             }
 
-            if (drillPiece) {
+            if (specialKind == SPECIAL_DRILL) {
                 stepDrill();
+            } else if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+                stepContactSpecial();
             } else if (canPlace(pieceX, pieceY + 1, rotation)) {
                 pieceY++;
             } else {
@@ -145,22 +162,41 @@ public class TetrisView extends View {
     }
 
     private void spawnPiece() {
-        drillPiece = random.nextInt(100) < DRILL_CHANCE_PERCENT;
-        rotation = 0;
-        pieceX = drillPiece ? COLS / 2 : 3;
-        pieceY = drillPiece ? 0 : -1;
+        int roll = random.nextInt(100);
+        if (roll < DRILL_CHANCE_PERCENT) {
+            specialKind = SPECIAL_DRILL;
+        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT) {
+            specialKind = SPECIAL_BOMB;
+        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT + COLOR_BOMB_CHANCE_PERCENT) {
+            specialKind = SPECIAL_COLOR_BOMB;
+        } else {
+            specialKind = SPECIAL_NORMAL;
+        }
 
-        if (drillPiece) {
-            currentType = 7;
+        rotation = 0;
+
+        if (specialKind == SPECIAL_DRILL) {
+            currentType = 0;
+            pieceX = COLS / 2;
+            pieceY = 0;
             if (board[pieceY][pieceX] != 0) {
                 board[pieceY][pieceX] = 0;
             }
-        } else {
+            return;
+        }
+
+        pieceX = 3;
+        pieceY = -1;
+
+        if (specialKind == SPECIAL_NORMAL) {
             currentType = random.nextInt(7);
-            if (!canPlace(pieceX, pieceY, rotation)) {
-                gameOver = true;
-                handler.removeCallbacks(tick);
-            }
+        } else {
+            currentType = 0;
+        }
+
+        if (!canPlace(pieceX, pieceY, rotation)) {
+            gameOver = true;
+            handler.removeCallbacks(tick);
         }
     }
 
@@ -168,12 +204,19 @@ public class TetrisView extends View {
         return Math.max(110L, 700L - (long) (level - 1) * 55L);
     }
 
+    private int[][] currentBlocks(int rot) {
+        if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+            return SPECIAL_SHAPE;
+        }
+        return SHAPES[currentType][rot];
+    }
+
     private boolean canPlace(int x, int y, int rot) {
-        if (drillPiece) {
+        if (specialKind == SPECIAL_DRILL) {
             return x >= 0 && x < COLS;
         }
 
-        int[][] blocks = SHAPES[currentType][rot];
+        int[][] blocks = currentBlocks(rot);
         for (int[] block : blocks) {
             int bx = x + block[0];
             int by = y + block[1];
@@ -189,7 +232,8 @@ public class TetrisView extends View {
 
     private void moveHorizontal(int delta) {
         if (gameOver) return;
-        if (drillPiece) {
+
+        if (specialKind == SPECIAL_DRILL) {
             int nx = pieceX + delta;
             if (nx >= 0 && nx < COLS) {
                 pieceX = nx;
@@ -199,12 +243,15 @@ public class TetrisView extends View {
             }
         } else if (canPlace(pieceX + delta, pieceY, rotation)) {
             pieceX += delta;
+            if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+                activateSpecialIfTouching();
+            }
         }
         invalidate();
     }
 
     private void rotatePiece() {
-        if (gameOver || drillPiece) return;
+        if (gameOver || specialKind != SPECIAL_NORMAL) return;
         int next = (rotation + 1) % 4;
         if (canPlace(pieceX, pieceY, next)) {
             rotation = next;
@@ -221,13 +268,32 @@ public class TetrisView extends View {
     private void hardDrop() {
         if (gameOver) return;
 
-        if (drillPiece) {
+        if (specialKind == SPECIAL_DRILL) {
             int start = Math.max(0, pieceY);
             for (int r = start; r < ROWS; r++) {
                 board[r][pieceX] = 0;
             }
             score += 25;
             spawnPiece();
+        } else if (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB) {
+            int distance = 0;
+            boolean activated = false;
+            while (canPlace(pieceX, pieceY + 1, rotation)) {
+                pieceY++;
+                distance++;
+                if (activateSpecialIfTouching()) {
+                    activated = true;
+                    break;
+                }
+            }
+            score += distance;
+            if (!activated && (specialKind == SPECIAL_BOMB || specialKind == SPECIAL_COLOR_BOMB)) {
+                if (!activateSpecialIfTouching()) {
+                    // Se arriva al fondo senza toccare blocchi, il pezzo speciale si consuma.
+                    score += 5;
+                    spawnPiece();
+                }
+            }
         } else {
             int distance = 0;
             while (canPlace(pieceX, pieceY + 1, rotation)) {
@@ -237,6 +303,7 @@ public class TetrisView extends View {
             score += distance * 2;
             lockPiece();
         }
+
         resetTickTimer();
         invalidate();
     }
@@ -251,6 +318,112 @@ public class TetrisView extends View {
             spawnPiece();
         } else if (board[pieceY][pieceX] != 0) {
             board[pieceY][pieceX] = 0;
+        }
+    }
+
+    private void stepContactSpecial() {
+        if (canPlace(pieceX, pieceY + 1, rotation)) {
+            pieceY++;
+            if (activateSpecialIfTouching()) {
+                return;
+            }
+        } else {
+            if (!activateSpecialIfTouching()) {
+                // Fondo libero: il pezzo scompare senza modificare il campo.
+                score += 5;
+                spawnPiece();
+            }
+        }
+    }
+
+    private boolean activateSpecialIfTouching() {
+        int[] contact = findTouchingBoardCell();
+        if (contact == null) return false;
+
+        int contactCol = contact[0];
+        int contactRow = contact[1];
+
+        if (specialKind == SPECIAL_BOMB) {
+            explodeArea(contactCol, contactRow);
+        } else if (specialKind == SPECIAL_COLOR_BOMB) {
+            explodeColor(contactCol, contactRow);
+        } else {
+            return false;
+        }
+
+        spawnPiece();
+        return true;
+    }
+
+    private int[] findTouchingBoardCell() {
+        int[][] neighbors = {
+                {0, 1}, {-1, 0}, {1, 0}, {0, -1}
+        };
+
+        for (int[] block : SPECIAL_SHAPE) {
+            int bx = pieceX + block[0];
+            int by = pieceY + block[1];
+            if (by < 0) continue;
+
+            for (int[] n : neighbors) {
+                int nx = bx + n[0];
+                int ny = by + n[1];
+                if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && board[ny][nx] != 0) {
+                    return new int[]{nx, ny};
+                }
+            }
+        }
+        return null;
+    }
+
+    private void explodeArea(int centerCol, int centerRow) {
+        int removed = 0;
+        for (int r = centerRow - 1; r <= centerRow + 1; r++) {
+            for (int c = centerCol - 1; c <= centerCol + 1; c++) {
+                if (r >= 0 && r < ROWS && c >= 0 && c < COLS && board[r][c] != 0) {
+                    board[r][c] = 0;
+                    removed++;
+                }
+            }
+        }
+        score += 40 + removed * 12;
+        // Nessuna gravita qui: il vuoto resta e crea davvero un buco nel muro.
+    }
+
+    private void explodeColor(int contactCol, int contactRow) {
+        int target = board[contactRow][contactCol];
+        if (target == 0) return;
+
+        int removed = 0;
+        for (int r = 0; r < ROWS; r++) {
+            for (int c = 0; c < COLS; c++) {
+                if (board[r][c] == target) {
+                    board[r][c] = 0;
+                    removed++;
+                }
+            }
+        }
+
+        applyColumnGravity();
+        score += 60 + removed * 15;
+        processCompletedLines();
+    }
+
+    private void applyColumnGravity() {
+        for (int c = 0; c < COLS; c++) {
+            int writeRow = ROWS - 1;
+            for (int r = ROWS - 1; r >= 0; r--) {
+                if (board[r][c] != 0) {
+                    int value = board[r][c];
+                    board[r][c] = 0;
+                    board[writeRow][c] = value;
+                    writeRow--;
+                }
+            }
+            while (writeRow >= 0) {
+                board[writeRow][c] = 0;
+                writeRow--;
+            }
         }
     }
 
@@ -273,20 +446,24 @@ public class TetrisView extends View {
             return;
         }
 
-        int cleared = clearCompletedLines();
-        if (cleared > 0) {
-            lines += cleared;
-            int base;
-            switch (cleared) {
-                case 1: base = 100; break;
-                case 2: base = 300; break;
-                case 3: base = 500; break;
-                default: base = 800; break;
-            }
-            score += base * level;
-            level = 1 + lines / 10;
-        }
+        processCompletedLines();
         spawnPiece();
+    }
+
+    private void processCompletedLines() {
+        int cleared = clearCompletedLines();
+        if (cleared <= 0) return;
+
+        lines += cleared;
+        int base;
+        switch (cleared) {
+            case 1: base = 100; break;
+            case 2: base = 300; break;
+            case 3: base = 500; break;
+            default: base = 800; break;
+        }
+        score += base * level;
+        level = 1 + lines / 10;
     }
 
     private int clearCompletedLines() {
@@ -399,18 +576,37 @@ public class TetrisView extends View {
     private void drawCurrentPiece(Canvas canvas) {
         if (gameOver) return;
 
-        if (drillPiece) {
+        if (specialKind == SPECIAL_DRILL) {
             if (pieceY >= 0 && pieceY < ROWS) {
-                drawCell(canvas, pieceX, pieceY, Color.rgb(255, 213, 74));
-                paint.setColor(Color.rgb(35, 35, 35));
-                paint.setTextAlign(Paint.Align.CENTER);
-                paint.setTextSize(cellSize * 0.65f);
-                paint.setFakeBoldText(true);
-                float cx = boardLeft + (pieceX + 0.5f) * cellSize;
-                float cy = boardTop + (pieceY + 0.72f) * cellSize;
-                canvas.drawText("▼", cx, cy, paint);
-                paint.setFakeBoldText(false);
-                paint.setTextAlign(Paint.Align.LEFT);
+                drawCell(canvas, pieceX, pieceY, DRILL_COLOR);
+                drawSymbol(canvas, pieceX, pieceY, "V", Color.rgb(35, 35, 35));
+            }
+            return;
+        }
+
+        if (specialKind == SPECIAL_BOMB) {
+            for (int[] block : SPECIAL_SHAPE) {
+                int x = pieceX + block[0];
+                int y = pieceY + block[1];
+                if (y >= 0) {
+                    drawCell(canvas, x, y, BOMB_COLOR);
+                    drawSymbol(canvas, x, y, "X", Color.WHITE);
+                }
+            }
+            return;
+        }
+
+        if (specialKind == SPECIAL_COLOR_BOMB) {
+            int index = 0;
+            for (int[] block : SPECIAL_SHAPE) {
+                int x = pieceX + block[0];
+                int y = pieceY + block[1];
+                if (y >= 0) {
+                    int color = COLORS[(index * 2 + 1) % COLORS.length];
+                    drawCell(canvas, x, y, color);
+                    drawSymbol(canvas, x, y, "C", Color.WHITE);
+                }
+                index++;
             }
             return;
         }
@@ -424,6 +620,18 @@ public class TetrisView extends View {
         }
     }
 
+    private void drawSymbol(Canvas canvas, int col, int row, String symbol, int color) {
+        float cx = boardLeft + (col + 0.5f) * cellSize;
+        float cy = boardTop + (row + 0.69f) * cellSize;
+        paint.setColor(color);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTextSize(cellSize * 0.48f);
+        paint.setFakeBoldText(true);
+        canvas.drawText(symbol, cx, cy, paint);
+        paint.setFakeBoldText(false);
+        paint.setTextAlign(Paint.Align.LEFT);
+    }
+
     private void drawCell(Canvas canvas, int col, int row, int color) {
         float inset = Math.max(1f, cellSize * 0.055f);
         float l = boardLeft + col * cellSize + inset;
@@ -435,8 +643,14 @@ public class TetrisView extends View {
         paint.setStyle(Paint.Style.FILL);
         canvas.drawRoundRect(new RectF(l, t, r, b), cellSize * 0.12f, cellSize * 0.12f, paint);
 
-        paint.setColor(Color.argb(55, 255, 255, 255));
+        paint.setColor(Color.argb(70, 255, 255, 255));
         canvas.drawRect(l + inset, t + inset, r - inset, t + cellSize * 0.16f, paint);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(1f, cellSize * 0.035f));
+        paint.setColor(Color.argb(70, 0, 0, 0));
+        canvas.drawRoundRect(new RectF(l, t, r, b), cellSize * 0.12f, cellSize * 0.12f, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private void drawControls(Canvas canvas, float height) {
@@ -458,12 +672,22 @@ public class TetrisView extends View {
         drawButton(canvas, rightButton, "→");
         drawButton(canvas, dropButton, "DROP");
 
-        if (drillPiece && !gameOver) {
+        if (!gameOver && specialKind != SPECIAL_NORMAL) {
             paint.setTextAlign(Paint.Align.CENTER);
-            paint.setColor(Color.rgb(255, 213, 74));
             paint.setTextSize(dp(12));
             paint.setFakeBoldText(true);
-            canvas.drawText("PERFORATORE", getWidth() / 2f, top - dp(6), paint);
+
+            if (specialKind == SPECIAL_DRILL) {
+                paint.setColor(DRILL_COLOR);
+                canvas.drawText("PERFORATORE", getWidth() / 2f, top - dp(6), paint);
+            } else if (specialKind == SPECIAL_BOMB) {
+                paint.setColor(BOMB_COLOR);
+                canvas.drawText("BOMBA - ESPLOSIONE 3 x 3", getWidth() / 2f, top - dp(6), paint);
+            } else {
+                paint.setColor(Color.rgb(115, 210, 255));
+                canvas.drawText("BOMBA COLORE - ELIMINA COLORE", getWidth() / 2f, top - dp(6), paint);
+            }
+
             paint.setFakeBoldText(false);
             paint.setTextAlign(Paint.Align.LEFT);
         }
