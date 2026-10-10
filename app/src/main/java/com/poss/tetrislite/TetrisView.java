@@ -7,6 +7,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -31,6 +32,8 @@ public class TetrisView extends View {
     private static final int BOMB_CHANCE_PERCENT = 6;
     private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
     private static final int ATOMIC_CHANCE_PERCENT = 5;
+
+    private static final long BURST_DURATION_MS = 260L;
 
     private static final int[][][][] SHAPES = {
             {
@@ -99,6 +102,7 @@ public class TetrisView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Random random = new Random();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ArrayList<BurstCell> burstCells = new ArrayList<>();
 
     private int currentType;
     private int rotation;
@@ -108,6 +112,7 @@ public class TetrisView extends View {
     private boolean gameOver;
 
     private boolean drillHasHit;
+    private boolean atomicHasHit;
     private int nextPieceId = 1;
 
     private int score;
@@ -124,6 +129,29 @@ public class TetrisView extends View {
     private final RectF rotateButton = new RectF();
     private final RectF rightButton = new RectF();
     private final RectF dropButton = new RectF();
+
+    private static class BurstCell {
+        final int col;
+        final int row;
+        final int color;
+        final long startedAt;
+
+        BurstCell(int col, int row, int color, long startedAt) {
+            this.col = col;
+            this.row = row;
+            this.color = color;
+            this.startedAt = startedAt;
+        }
+    }
+
+    private final Runnable burstAnimator = new Runnable() {
+        @Override
+        public void run() {
+            if (burstCells.isEmpty()) return;
+            invalidate();
+            handler.postDelayed(this, 16L);
+        }
+    };
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -160,6 +188,8 @@ public class TetrisView extends View {
 
     private void startNewGame() {
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(burstAnimator);
+        burstCells.clear();
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
                 board[r][c] = 0;
@@ -191,6 +221,7 @@ public class TetrisView extends View {
 
         rotation = 0;
         drillHasHit = false;
+        atomicHasHit = false;
 
         if (specialKind != SPECIAL_NORMAL) {
             currentType = 0;
@@ -233,21 +264,31 @@ public class TetrisView extends View {
         if (specialKind == SPECIAL_NORMAL) {
             if (canPlaceNormal(pieceX + delta, pieceY, rotation)) pieceX += delta;
         } else if (specialKind == SPECIAL_DRILL) {
-            // Il perforatore e controllabile solo prima del primo contatto.
+            // Perforatore controllabile solo prima del primo contatto.
             if (!drillHasHit) {
                 int nx = pieceX + delta;
                 if (nx >= 0 && nx < COLS) {
                     pieceX = nx;
                     if (pieceY >= 0 && board[pieceY][pieceX] != 0) {
-                        clearBoardCell(pieceY, pieceX);
+                        clearBoardCell(pieceY, pieceX, true);
                         drillHasHit = true;
                     }
                 }
             }
         } else if (specialKind == SPECIAL_ATOMIC) {
-            // ATOMIC resta sempre sulla sua colonna: perforazione perpendicolare pura.
+            // ATOMIC e direzionabile finche non perfora il primo tetramino.
+            if (!atomicHasHit) {
+                int nx = pieceX + delta;
+                if (nx >= 0 && nx < COLS) {
+                    pieceX = nx;
+                    if (pieceY >= 0 && board[pieceY][pieceX] != 0) {
+                        clearBoardCell(pieceY, pieceX, true);
+                        atomicHasHit = true;
+                    }
+                }
+            }
         } else {
-            // BOMBA e BOMBA COLORE possono scorrere accanto ai blocchi senza esplodere.
+            // Le bombe possono passare accanto ai blocchi senza esplodere.
             int nx = pieceX + delta;
             if (specialDestinationFree(nx, pieceY)) pieceX = nx;
         }
@@ -305,10 +346,10 @@ public class TetrisView extends View {
         advanceDrillOneStep();
     }
 
-    // Dopo il primo impatto, OGNI passo sceglie casualmente GIU, SINISTRA o DESTRA.
+    // Dopo il primo impatto, ogni passo sceglie casualmente GIU, SINISTRA o DESTRA.
     private boolean advanceDrillOneStep() {
         if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
-            clearBoardCell(pieceY, pieceX);
+            clearBoardCell(pieceY, pieceX, true);
             drillHasHit = true;
         }
 
@@ -318,7 +359,7 @@ public class TetrisView extends View {
         if (!drillHasHit) {
             ny = pieceY + 1;
         } else {
-            int direction = random.nextInt(3); // 0=giu, 1=sinistra, 2=destra
+            int direction = random.nextInt(3);
             if (direction == 0) {
                 ny = pieceY + 1;
             } else if (direction == 1) {
@@ -344,9 +385,8 @@ public class TetrisView extends View {
 
         pieceX = nx;
         pieceY = ny;
-
         if (pieceY >= 0 && board[pieceY][pieceX] != 0) {
-            clearBoardCell(pieceY, pieceX);
+            clearBoardCell(pieceY, pieceX, true);
             drillHasHit = true;
         }
         return false;
@@ -355,7 +395,6 @@ public class TetrisView extends View {
     // ---------------- BOMBA / BOMBA COLORE ----------------
 
     private void stepBottomBomb(boolean colorBomb) {
-        // Unica condizione di innesco: cella OCCUPATA immediatamente sotto.
         int[] contact = findBottomContact();
         if (contact != null) {
             if (colorBomb) explodeColor6x6(contact[0], contact[1]);
@@ -371,11 +410,9 @@ public class TetrisView extends View {
             return;
         }
 
-        // Se sotto e libero, scende. I blocchi laterali sono completamente ignorati.
         if (nextY < 0 || board[nextY][pieceX] == 0) {
             pieceY = nextY;
         } else {
-            // Caso teoricamente equivalente al contatto sotto: gestito qui per sicurezza.
             if (colorBomb) explodeColor6x6(pieceX, nextY);
             else explodeArea3x3(pieceX, nextY);
             spawnPiece();
@@ -415,7 +452,7 @@ public class TetrisView extends View {
         for (int r = centerRow - 1; r <= centerRow + 1; r++) {
             for (int c = centerCol - 1; c <= centerCol + 1; c++) {
                 if (inside(c, r) && board[r][c] != 0) {
-                    clearBoardCell(r, c);
+                    clearBoardCell(r, c, true);
                     removed++;
                 }
             }
@@ -445,7 +482,7 @@ public class TetrisView extends View {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
                 if (idsToRemove.contains(pieceIds[r][c])) {
-                    clearBoardCell(r, c);
+                    clearBoardCell(r, c, true);
                     removedCells++;
                 }
             }
@@ -462,10 +499,11 @@ public class TetrisView extends View {
         advanceAtomicOneStep();
     }
 
-    // ATOMIC resta sulla stessa colonna, cancella tutto sul percorso e scoppia solo alla base.
+    // Prima del primo impatto ATOMIC e direzionabile; dopo l'impatto resta sulla stessa colonna.
     private boolean advanceAtomicOneStep() {
         if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
-            clearBoardCell(pieceY, pieceX);
+            clearBoardCell(pieceY, pieceX, true);
+            atomicHasHit = true;
         }
 
         int nextY = pieceY + 1;
@@ -477,7 +515,10 @@ public class TetrisView extends View {
         }
 
         pieceY = nextY;
-        if (board[pieceY][pieceX] != 0) clearBoardCell(pieceY, pieceX);
+        if (board[pieceY][pieceX] != 0) {
+            clearBoardCell(pieceY, pieceX, true);
+            atomicHasHit = true;
+        }
         return false;
     }
 
@@ -489,7 +530,7 @@ public class TetrisView extends View {
         for (int r = startRow; r < ROWS; r++) {
             for (int c = startCol; c < startCol + 6; c++) {
                 if (board[r][c] != 0) {
-                    clearBoardCell(r, c);
+                    clearBoardCell(r, c, true);
                     removed++;
                 }
             }
@@ -578,9 +619,20 @@ public class TetrisView extends View {
         }
     }
 
-    private void clearBoardCell(int row, int col) {
+    private void clearBoardCell(int row, int col, boolean animate) {
+        if (!inside(col, row)) return;
+        int value = board[row][col];
+        if (value == 0) return;
+
+        if (animate) addBurst(col, row, COLORS[value - 1]);
         board[row][col] = 0;
         pieceIds[row][col] = 0;
+    }
+
+    private void addBurst(int col, int row, int color) {
+        burstCells.add(new BurstCell(col, row, color, SystemClock.uptimeMillis()));
+        handler.removeCallbacks(burstAnimator);
+        handler.post(burstAnimator);
     }
 
     // ---------------- TETRIS CLASSICO ----------------
@@ -638,6 +690,14 @@ public class TetrisView extends View {
             }
 
             if (full) {
+                long now = SystemClock.uptimeMillis();
+                for (int c = 0; c < COLS; c++) {
+                    int value = board[r][c];
+                    if (value != 0) burstCells.add(new BurstCell(c, r, COLORS[value - 1], now));
+                }
+                handler.removeCallbacks(burstAnimator);
+                handler.post(burstAnimator);
+
                 cleared++;
                 for (int rr = r; rr > 0; rr--) {
                     System.arraycopy(board[rr - 1], 0, board[rr], 0, COLS);
@@ -680,6 +740,7 @@ public class TetrisView extends View {
         drawHeader(canvas);
         drawBoard(canvas);
         drawCurrentPiece(canvas);
+        drawBurstEffects(canvas);
         drawControls(canvas, height);
 
         if (gameOver) drawGameOver(canvas, width, height);
@@ -757,8 +818,42 @@ public class TetrisView extends View {
             drawSymbol(canvas, pieceX, pieceY, "C", Color.WHITE);
         } else if (specialKind == SPECIAL_ATOMIC) {
             drawCell(canvas, pieceX, pieceY, ATOMIC_COLOR);
-            drawSymbol(canvas, pieceX, pieceY, "A", Color.rgb(20, 35, 20));
+            drawSymbol(canvas, pieceX, pieceY, atomicHasHit ? "A" : "↔", Color.rgb(20, 35, 20));
         }
+    }
+
+    private void drawBurstEffects(Canvas canvas) {
+        if (burstCells.isEmpty()) return;
+
+        long now = SystemClock.uptimeMillis();
+        boolean active = false;
+        for (int i = burstCells.size() - 1; i >= 0; i--) {
+            BurstCell burst = burstCells.get(i);
+            float progress = (now - burst.startedAt) / (float) BURST_DURATION_MS;
+            if (progress >= 1f) {
+                burstCells.remove(i);
+                continue;
+            }
+            active = true;
+            progress = Math.max(0f, progress);
+
+            float cx = boardLeft + (burst.col + 0.5f) * cellSize;
+            float cy = boardTop + (burst.row + 0.5f) * cellSize;
+            float half = cellSize * (0.42f + progress * 0.22f);
+            int alpha = (int) (220f * (1f - progress));
+            int flashAlpha = (int) (190f * Math.max(0f, 1f - progress * 3.5f));
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(alpha, Color.red(burst.color), Color.green(burst.color), Color.blue(burst.color)));
+            canvas.drawRoundRect(new RectF(cx - half, cy - half, cx + half, cy + half), cellSize * 0.14f, cellSize * 0.14f, paint);
+
+            if (flashAlpha > 0) {
+                paint.setColor(Color.argb(flashAlpha, 255, 255, 255));
+                canvas.drawCircle(cx, cy, cellSize * (0.24f + progress * 0.35f), paint);
+            }
+        }
+
+        if (!active) handler.removeCallbacks(burstAnimator);
     }
 
     private void drawSymbol(Canvas canvas, int col, int row, String symbol, int color) {
@@ -829,7 +924,10 @@ public class TetrisView extends View {
                 canvas.drawText("BOMBA COLORE 1x1 - AREA 6x6", getWidth() / 2f, top - dp(6), paint);
             } else {
                 paint.setColor(ATOMIC_COLOR);
-                canvas.drawText("ATOMIC 1x1 - PERFORA + ESPLOSIONE 6x6", getWidth() / 2f, top - dp(6), paint);
+                String atomicText = atomicHasHit
+                        ? "ATOMIC - TRAIETTORIA BLOCCATA"
+                        : "ATOMIC - DIREZIONABILE FINO AL PRIMO IMPATTO";
+                canvas.drawText(atomicText, getWidth() / 2f, top - dp(6), paint);
             }
 
             paint.setFakeBoldText(false);
@@ -934,6 +1032,7 @@ public class TetrisView extends View {
     @Override
     protected void onDetachedFromWindow() {
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(burstAnimator);
         super.onDetachedFromWindow();
     }
 }
