@@ -25,51 +25,51 @@ public class TetrisView extends View {
     private static final int SPECIAL_DRILL = 1;
     private static final int SPECIAL_BOMB = 2;
     private static final int SPECIAL_COLOR_BOMB = 3;
+    private static final int SPECIAL_ATOMIC = 4;
 
     private static final int DRILL_CHANCE_PERCENT = 9;
     private static final int BOMB_CHANCE_PERCENT = 6;
     private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
-
-    private static final int[][] SPECIAL_SHAPE = {{0, 0}};
+    private static final int ATOMIC_CHANCE_PERCENT = 5;
 
     private static final int[][][][] SHAPES = {
-            { // I
+            {
                     {{0,1},{1,1},{2,1},{3,1}},
                     {{2,0},{2,1},{2,2},{2,3}},
                     {{0,2},{1,2},{2,2},{3,2}},
                     {{1,0},{1,1},{1,2},{1,3}}
             },
-            { // O
+            {
                     {{1,0},{2,0},{1,1},{2,1}},
                     {{1,0},{2,0},{1,1},{2,1}},
                     {{1,0},{2,0},{1,1},{2,1}},
                     {{1,0},{2,0},{1,1},{2,1}}
             },
-            { // T
+            {
                     {{1,0},{0,1},{1,1},{2,1}},
                     {{1,0},{1,1},{2,1},{1,2}},
                     {{0,1},{1,1},{2,1},{1,2}},
                     {{1,0},{0,1},{1,1},{1,2}}
             },
-            { // S
+            {
                     {{1,0},{2,0},{0,1},{1,1}},
                     {{1,0},{1,1},{2,1},{2,2}},
                     {{1,1},{2,1},{0,2},{1,2}},
                     {{0,0},{0,1},{1,1},{1,2}}
             },
-            { // Z
+            {
                     {{0,0},{1,0},{1,1},{2,1}},
                     {{2,0},{1,1},{2,1},{1,2}},
                     {{0,1},{1,1},{1,2},{2,2}},
                     {{1,0},{0,1},{1,1},{0,2}}
             },
-            { // J
+            {
                     {{0,0},{0,1},{1,1},{2,1}},
                     {{1,0},{2,0},{1,1},{1,2}},
                     {{0,1},{1,1},{2,1},{2,2}},
                     {{1,0},{1,1},{0,2},{1,2}}
             },
-            { // L
+            {
                     {{2,0},{0,1},{1,1},{2,1}},
                     {{1,0},{1,1},{1,2},{2,2}},
                     {{0,1},{1,1},{2,1},{0,2}},
@@ -90,8 +90,9 @@ public class TetrisView extends View {
     private static final int DRILL_COLOR = Color.rgb(255, 221, 71);
     private static final int BOMB_COLOR = Color.rgb(255, 67, 54);
     private static final int COLOR_BOMB_COLOR = Color.rgb(115, 210, 255);
+    private static final int ATOMIC_COLOR = Color.rgb(104, 255, 128);
 
-    // board contiene il colore (1..7). pieceIds conserva l'identita del tetramino.
+    // board = colore 1..7; pieceIds = identita del tetramino classico.
     private final int[][] board = new int[ROWS][COLS];
     private final int[][] pieceIds = new int[ROWS][COLS];
 
@@ -107,7 +108,6 @@ public class TetrisView extends View {
     private boolean gameOver;
 
     private boolean drillHasHit;
-    private int drillDx;
     private int nextPieceId = 1;
 
     private int score;
@@ -136,19 +136,19 @@ public class TetrisView extends View {
             if (specialKind == SPECIAL_DRILL) {
                 stepDrill();
             } else if (specialKind == SPECIAL_BOMB) {
-                stepBomb();
+                stepBottomBomb(false);
             } else if (specialKind == SPECIAL_COLOR_BOMB) {
-                stepColorBomb();
-            } else if (canPlace(pieceX, pieceY + 1, rotation)) {
+                stepBottomBomb(true);
+            } else if (specialKind == SPECIAL_ATOMIC) {
+                stepAtomic();
+            } else if (canPlaceNormal(pieceX, pieceY + 1, rotation)) {
                 pieceY++;
             } else {
                 lockPiece();
             }
 
             invalidate();
-            if (!gameOver) {
-                handler.postDelayed(this, dropInterval());
-            }
+            if (!gameOver) handler.postDelayed(this, dropInterval());
         }
     };
 
@@ -178,19 +178,19 @@ public class TetrisView extends View {
 
     private void spawnPiece() {
         int roll = random.nextInt(100);
-        if (roll < DRILL_CHANCE_PERCENT) {
-            specialKind = SPECIAL_DRILL;
-        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT) {
-            specialKind = SPECIAL_BOMB;
-        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT + COLOR_BOMB_CHANCE_PERCENT) {
-            specialKind = SPECIAL_COLOR_BOMB;
-        } else {
-            specialKind = SPECIAL_NORMAL;
-        }
+        int limitDrill = DRILL_CHANCE_PERCENT;
+        int limitBomb = limitDrill + BOMB_CHANCE_PERCENT;
+        int limitColor = limitBomb + COLOR_BOMB_CHANCE_PERCENT;
+        int limitAtomic = limitColor + ATOMIC_CHANCE_PERCENT;
+
+        if (roll < limitDrill) specialKind = SPECIAL_DRILL;
+        else if (roll < limitBomb) specialKind = SPECIAL_BOMB;
+        else if (roll < limitColor) specialKind = SPECIAL_COLOR_BOMB;
+        else if (roll < limitAtomic) specialKind = SPECIAL_ATOMIC;
+        else specialKind = SPECIAL_NORMAL;
 
         rotation = 0;
         drillHasHit = false;
-        drillDx = 0;
 
         if (specialKind != SPECIAL_NORMAL) {
             currentType = 0;
@@ -199,11 +199,10 @@ public class TetrisView extends View {
             return;
         }
 
+        currentType = random.nextInt(7);
         pieceX = 3;
         pieceY = -1;
-        currentType = random.nextInt(7);
-
-        if (!canPlace(pieceX, pieceY, rotation)) {
+        if (!canPlaceNormal(pieceX, pieceY, rotation)) {
             gameOver = true;
             handler.removeCallbacks(tick);
         }
@@ -213,16 +212,8 @@ public class TetrisView extends View {
         return Math.max(110L, 700L - (long) (level - 1) * 55L);
     }
 
-    private int[][] currentBlocks(int rot) {
-        return specialKind == SPECIAL_NORMAL ? SHAPES[currentType][rot] : SPECIAL_SHAPE;
-    }
-
-    private boolean canPlace(int x, int y, int rot) {
-        if (specialKind == SPECIAL_DRILL) {
-            return x >= 0 && x < COLS && y < ROWS;
-        }
-
-        for (int[] block : currentBlocks(rot)) {
+    private boolean canPlaceNormal(int x, int y, int rot) {
+        for (int[] block : SHAPES[currentType][rot]) {
             int bx = x + block[0];
             int by = y + block[1];
             if (bx < 0 || bx >= COLS || by >= ROWS) return false;
@@ -231,25 +222,34 @@ public class TetrisView extends View {
         return true;
     }
 
+    private boolean specialDestinationFree(int x, int y) {
+        if (x < 0 || x >= COLS || y >= ROWS) return false;
+        return y < 0 || board[y][x] == 0;
+    }
+
     private void moveHorizontal(int delta) {
         if (gameOver) return;
 
-        if (specialKind == SPECIAL_DRILL) {
-            // Dopo il primo impatto la traiettoria del perforatore e automatica.
-            if (drillHasHit) return;
-            int nx = pieceX + delta;
-            if (nx >= 0 && nx < COLS) {
-                pieceX = nx;
-                if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
-                    clearBoardCell(pieceY, pieceX);
-                    registerFirstDrillHit();
+        if (specialKind == SPECIAL_NORMAL) {
+            if (canPlaceNormal(pieceX + delta, pieceY, rotation)) pieceX += delta;
+        } else if (specialKind == SPECIAL_DRILL) {
+            // Il perforatore e controllabile solo prima del primo contatto.
+            if (!drillHasHit) {
+                int nx = pieceX + delta;
+                if (nx >= 0 && nx < COLS) {
+                    pieceX = nx;
+                    if (pieceY >= 0 && board[pieceY][pieceX] != 0) {
+                        clearBoardCell(pieceY, pieceX);
+                        drillHasHit = true;
+                    }
                 }
             }
-        } else if (canPlace(pieceX + delta, pieceY, rotation)) {
-            pieceX += delta;
-            // La bomba normale esplode anche per contatto laterale.
-            if (specialKind == SPECIAL_BOMB) activateBombIfTouching();
-            // La bomba colore NON esplode mai per contatto laterale.
+        } else if (specialKind == SPECIAL_ATOMIC) {
+            // ATOMIC resta sempre sulla sua colonna: perforazione perpendicolare pura.
+        } else {
+            // BOMBA e BOMBA COLORE possono scorrere accanto ai blocchi senza esplodere.
+            int nx = pieceX + delta;
+            if (specialDestinationFree(nx, pieceY)) pieceX = nx;
         }
         invalidate();
     }
@@ -257,12 +257,12 @@ public class TetrisView extends View {
     private void rotatePiece() {
         if (gameOver || specialKind != SPECIAL_NORMAL) return;
         int next = (rotation + 1) % 4;
-        if (canPlace(pieceX, pieceY, next)) {
+        if (canPlaceNormal(pieceX, pieceY, next)) {
             rotation = next;
-        } else if (canPlace(pieceX - 1, pieceY, next)) {
+        } else if (canPlaceNormal(pieceX - 1, pieceY, next)) {
             pieceX--;
             rotation = next;
-        } else if (canPlace(pieceX + 1, pieceY, next)) {
+        } else if (canPlaceNormal(pieceX + 1, pieceY, next)) {
             pieceX++;
             rotation = next;
         }
@@ -272,191 +272,163 @@ public class TetrisView extends View {
     private void hardDrop() {
         if (gameOver) return;
 
-        if (specialKind == SPECIAL_DRILL) {
-            for (int i = 0; i < ROWS * 3; i++) {
-                if (advanceDrillOneStep()) break;
-            }
-        } else if (specialKind == SPECIAL_BOMB) {
+        if (specialKind == SPECIAL_NORMAL) {
             int distance = 0;
-            if (!activateBombIfTouching()) {
-                boolean activated = false;
-                while (canPlace(pieceX, pieceY + 1, rotation)) {
-                    pieceY++;
-                    distance++;
-                    if (activateBombIfTouching()) {
-                        activated = true;
-                        break;
-                    }
-                }
-                score += distance;
-                if (!activated && specialKind == SPECIAL_BOMB) {
-                    score += 5;
-                    spawnPiece();
-                }
-            }
-        } else if (specialKind == SPECIAL_COLOR_BOMB) {
-            int distance = 0;
-            boolean activated = false;
-            while (true) {
-                if (activateColorBombIfBottomTouching()) {
-                    activated = true;
-                    break;
-                }
-                if (!canPlace(pieceX, pieceY + 1, rotation)) break;
-                pieceY++;
-                distance++;
-            }
-            score += distance;
-            if (!activated && specialKind == SPECIAL_COLOR_BOMB) {
-                if (!activateColorBombIfBottomTouching()) {
-                    score += 5;
-                    spawnPiece();
-                }
-            }
-        } else {
-            int distance = 0;
-            while (canPlace(pieceX, pieceY + 1, rotation)) {
+            while (canPlaceNormal(pieceX, pieceY + 1, rotation)) {
                 pieceY++;
                 distance++;
             }
             score += distance * 2;
             lockPiece();
+        } else if (specialKind == SPECIAL_DRILL) {
+            int safety = ROWS * COLS * 10;
+            while (specialKind == SPECIAL_DRILL && safety-- > 0) {
+                if (advanceDrillOneStep()) break;
+            }
+        } else if (specialKind == SPECIAL_BOMB) {
+            hardDropBottomBomb(false);
+        } else if (specialKind == SPECIAL_COLOR_BOMB) {
+            hardDropBottomBomb(true);
+        } else if (specialKind == SPECIAL_ATOMIC) {
+            while (specialKind == SPECIAL_ATOMIC) {
+                if (advanceAtomicOneStep()) break;
+            }
         }
 
         resetTickTimer();
         invalidate();
     }
 
+    // ---------------- PERFORATORE ----------------
+
     private void stepDrill() {
         advanceDrillOneStep();
     }
 
-    // Ritorna true quando questo perforatore ha terminato il percorso.
+    // Dopo il primo impatto, OGNI passo sceglie casualmente GIU, SINISTRA o DESTRA.
     private boolean advanceDrillOneStep() {
         if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
             clearBoardCell(pieceY, pieceX);
-            registerFirstDrillHit();
+            drillHasHit = true;
         }
 
-        int nextY = pieceY + 1;
-        int nextX = pieceX;
+        int nx = pieceX;
+        int ny = pieceY;
 
-        if (drillHasHit) {
-            nextX = pieceX + drillDx;
-            if (nextX < 0 || nextX >= COLS) {
-                drillDx = -drillDx;
-                nextX = pieceX + drillDx;
+        if (!drillHasHit) {
+            ny = pieceY + 1;
+        } else {
+            int direction = random.nextInt(3); // 0=giu, 1=sinistra, 2=destra
+            if (direction == 0) {
+                ny = pieceY + 1;
+            } else if (direction == 1) {
+                nx = pieceX - 1;
+                if (nx < 0) {
+                    nx = pieceX;
+                    ny = pieceY + 1;
+                }
+            } else {
+                nx = pieceX + 1;
+                if (nx >= COLS) {
+                    nx = pieceX;
+                    ny = pieceY + 1;
+                }
             }
         }
 
-        if (nextY >= ROWS) {
+        if (ny >= ROWS) {
             score += 25;
             spawnPiece();
             return true;
         }
 
-        pieceX = nextX;
-        pieceY = nextY;
+        pieceX = nx;
+        pieceY = ny;
 
-        if (board[pieceY][pieceX] != 0) {
+        if (pieceY >= 0 && board[pieceY][pieceX] != 0) {
             clearBoardCell(pieceY, pieceX);
-            registerFirstDrillHit();
+            drillHasHit = true;
         }
         return false;
     }
 
-    private void registerFirstDrillHit() {
-        if (!drillHasHit) {
-            drillHasHit = true;
-            drillDx = random.nextBoolean() ? -1 : 1;
+    // ---------------- BOMBA / BOMBA COLORE ----------------
+
+    private void stepBottomBomb(boolean colorBomb) {
+        // Unica condizione di innesco: cella OCCUPATA immediatamente sotto.
+        int[] contact = findBottomContact();
+        if (contact != null) {
+            if (colorBomb) explodeColor6x6(contact[0], contact[1]);
+            else explodeArea3x3(contact[0], contact[1]);
+            spawnPiece();
+            return;
         }
-    }
 
-    private void stepBomb() {
-        if (activateBombIfTouching()) return;
-
-        if (canPlace(pieceX, pieceY + 1, rotation)) {
-            pieceY++;
-            activateBombIfTouching();
-        } else {
+        int nextY = pieceY + 1;
+        if (nextY >= ROWS) {
             score += 5;
+            spawnPiece();
+            return;
+        }
+
+        // Se sotto e libero, scende. I blocchi laterali sono completamente ignorati.
+        if (nextY < 0 || board[nextY][pieceX] == 0) {
+            pieceY = nextY;
+        } else {
+            // Caso teoricamente equivalente al contatto sotto: gestito qui per sicurezza.
+            if (colorBomb) explodeColor6x6(pieceX, nextY);
+            else explodeArea3x3(pieceX, nextY);
             spawnPiece();
         }
     }
 
-    private void stepColorBomb() {
-        // Si attiva ESCLUSIVAMENTE quando la parte bassa del quadratino tocca un blocco.
-        if (activateColorBombIfBottomTouching()) return;
-
-        if (canPlace(pieceX, pieceY + 1, rotation)) {
-            pieceY++;
-            activateColorBombIfBottomTouching();
-        } else {
-            // Se arriva al pavimento senza un blocco sotto si consuma senza esplodere.
-            score += 5;
-            spawnPiece();
-        }
-    }
-
-    private boolean activateBombIfTouching() {
-        int[] contact = findAnyTouchingBoardCell();
-        if (contact == null) return false;
-        explodeArea(contact[0], contact[1]);
-        spawnPiece();
-        return true;
-    }
-
-    private boolean activateColorBombIfBottomTouching() {
-        int[] contact = findBottomBoardCell();
-        if (contact == null) return false;
-        explodeColor6x6(contact[0], contact[1]);
-        spawnPiece();
-        return true;
-    }
-
-    private int[] findAnyTouchingBoardCell() {
-        if (pieceY < -1) return null;
-        int[][] neighbors = {{0,1},{-1,0},{1,0},{0,-1}};
-        for (int[] n : neighbors) {
-            int nx = pieceX + n[0];
-            int ny = pieceY + n[1];
-            if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && board[ny][nx] != 0) {
-                return new int[]{nx, ny};
+    private void hardDropBottomBomb(boolean colorBomb) {
+        while (specialKind == (colorBomb ? SPECIAL_COLOR_BOMB : SPECIAL_BOMB)) {
+            int[] contact = findBottomContact();
+            if (contact != null) {
+                if (colorBomb) explodeColor6x6(contact[0], contact[1]);
+                else explodeArea3x3(contact[0], contact[1]);
+                spawnPiece();
+                return;
             }
+
+            int nextY = pieceY + 1;
+            if (nextY >= ROWS) {
+                score += 5;
+                spawnPiece();
+                return;
+            }
+            pieceY = nextY;
         }
-        return null;
     }
 
-    private int[] findBottomBoardCell() {
-        int nx = pieceX;
+    private int[] findBottomContact() {
         int ny = pieceY + 1;
-        if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS && board[ny][nx] != 0) {
-            return new int[]{nx, ny};
+        if (pieceX >= 0 && pieceX < COLS && ny >= 0 && ny < ROWS && board[ny][pieceX] != 0) {
+            return new int[]{pieceX, ny};
         }
         return null;
     }
 
-    private void explodeArea(int centerCol, int centerRow) {
+    private void explodeArea3x3(int centerCol, int centerRow) {
         int removed = 0;
         for (int r = centerRow - 1; r <= centerRow + 1; r++) {
             for (int c = centerCol - 1; c <= centerCol + 1; c++) {
-                if (r >= 0 && r < ROWS && c >= 0 && c < COLS && board[r][c] != 0) {
+                if (inside(c, r) && board[r][c] != 0) {
                     clearBoardCell(r, c);
                     removed++;
                 }
             }
         }
         score += 40 + removed * 12;
-        // La bomba normale lascia il buco: niente gravita immediata.
     }
 
     private void explodeColor6x6(int contactCol, int contactRow) {
         int targetColor = board[contactRow][contactCol];
         if (targetColor == 0) return;
 
-        // Finestra sempre 6x6, spostata verso l'interno vicino ai bordi.
-        int startCol = Math.max(0, Math.min(COLS - 6, contactCol - 2));
-        int startRow = Math.max(0, Math.min(ROWS - 6, contactRow - 2));
+        int startCol = clampWindowStart(contactCol - 2, COLS, 6);
+        int startRow = clampWindowStart(contactRow - 2, ROWS, 6);
         int endCol = startCol + 5;
         int endRow = startRow + 5;
 
@@ -470,28 +442,74 @@ public class TetrisView extends View {
         }
 
         int removedCells = 0;
-        if (!idsToRemove.isEmpty()) {
-            // Se un tetramino dello stesso colore entra nel 6x6, viene eliminato per intero.
-            for (int r = 0; r < ROWS; r++) {
-                for (int c = 0; c < COLS; c++) {
-                    if (idsToRemove.contains(pieceIds[r][c])) {
-                        clearBoardCell(r, c);
-                        removedCells++;
-                    }
+        for (int r = 0; r < ROWS; r++) {
+            for (int c = 0; c < COLS; c++) {
+                if (idsToRemove.contains(pieceIds[r][c])) {
+                    clearBoardCell(r, c);
+                    removedCells++;
                 }
             }
         }
 
-        // I pezzi superstiti restano corpi rigidi: niente compressione colonna per colonna.
         applyRigidTetrominoGravity();
         score += 60 + removedCells * 15;
         processCompletedLines();
     }
 
+    // ---------------- ATOMIC ----------------
+
+    private void stepAtomic() {
+        advanceAtomicOneStep();
+    }
+
+    // ATOMIC resta sulla stessa colonna, cancella tutto sul percorso e scoppia solo alla base.
+    private boolean advanceAtomicOneStep() {
+        if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
+            clearBoardCell(pieceY, pieceX);
+        }
+
+        int nextY = pieceY + 1;
+        if (nextY >= ROWS) {
+            explodeAtomic6x6(pieceX);
+            score += 100;
+            spawnPiece();
+            return true;
+        }
+
+        pieceY = nextY;
+        if (board[pieceY][pieceX] != 0) clearBoardCell(pieceY, pieceX);
+        return false;
+    }
+
+    private void explodeAtomic6x6(int centerCol) {
+        int startCol = clampWindowStart(centerCol - 2, COLS, 6);
+        int startRow = ROWS - 6;
+        int removed = 0;
+
+        for (int r = startRow; r < ROWS; r++) {
+            for (int c = startCol; c < startCol + 6; c++) {
+                if (board[r][c] != 0) {
+                    clearBoardCell(r, c);
+                    removed++;
+                }
+            }
+        }
+        score += removed * 12;
+    }
+
+    private int clampWindowStart(int desired, int total, int window) {
+        return Math.max(0, Math.min(total - window, desired));
+    }
+
+    private boolean inside(int col, int row) {
+        return col >= 0 && col < COLS && row >= 0 && row < ROWS;
+    }
+
+    // ---------------- GRAVITA A TETRAMINI INTERI ----------------
+
     private void applyRigidTetrominoGravity() {
         int safety = ROWS * ROWS;
         boolean moved;
-
         do {
             moved = false;
             ArrayList<Integer> ids = collectPieceIds();
@@ -565,6 +583,8 @@ public class TetrisView extends View {
         pieceIds[row][col] = 0;
     }
 
+    // ---------------- TETRIS CLASSICO ----------------
+
     private void lockPiece() {
         boolean aboveTop = false;
         int id = nextPieceId++;
@@ -574,7 +594,7 @@ public class TetrisView extends View {
             int by = pieceY + block[1];
             if (by < 0) {
                 aboveTop = true;
-            } else if (by < ROWS && bx >= 0 && bx < COLS) {
+            } else if (inside(bx, by)) {
                 board[by][bx] = currentType + 1;
                 pieceIds[by][bx] = id;
             }
@@ -638,6 +658,8 @@ public class TetrisView extends View {
         if (!gameOver) handler.postDelayed(tick, dropInterval());
     }
 
+    // ---------------- DISEGNO ----------------
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
@@ -674,10 +696,8 @@ public class TetrisView extends View {
         paint.setTextSize(dp(14));
         paint.setColor(Color.rgb(190, 197, 214));
         canvas.drawText("PUNTI " + score, dp(14), dp(58), paint);
-
         paint.setTextAlign(Paint.Align.CENTER);
         canvas.drawText("LINEE " + lines, getWidth() / 2f, dp(58), paint);
-
         paint.setTextAlign(Paint.Align.RIGHT);
         canvas.drawText("LIV " + level, getWidth() - dp(14), dp(58), paint);
         paint.setTextAlign(Paint.Align.LEFT);
@@ -715,35 +735,29 @@ public class TetrisView extends View {
     private void drawCurrentPiece(Canvas canvas) {
         if (gameOver) return;
 
+        if (specialKind == SPECIAL_NORMAL) {
+            for (int[] block : SHAPES[currentType][rotation]) {
+                int x = pieceX + block[0];
+                int y = pieceY + block[1];
+                if (y >= 0) drawCell(canvas, x, y, COLORS[currentType]);
+            }
+            return;
+        }
+
+        if (pieceY < 0 || pieceY >= ROWS) return;
+
         if (specialKind == SPECIAL_DRILL) {
-            if (pieceY >= 0 && pieceY < ROWS) {
-                drawCell(canvas, pieceX, pieceY, DRILL_COLOR);
-                String symbol = !drillHasHit ? "V" : (drillDx < 0 ? "<" : ">");
-                drawSymbol(canvas, pieceX, pieceY, symbol, Color.rgb(35, 35, 35));
-            }
-            return;
-        }
-
-        if (specialKind == SPECIAL_BOMB) {
-            if (pieceY >= 0 && pieceY < ROWS) {
-                drawCell(canvas, pieceX, pieceY, BOMB_COLOR);
-                drawSymbol(canvas, pieceX, pieceY, "X", Color.WHITE);
-            }
-            return;
-        }
-
-        if (specialKind == SPECIAL_COLOR_BOMB) {
-            if (pieceY >= 0 && pieceY < ROWS) {
-                drawCell(canvas, pieceX, pieceY, COLOR_BOMB_COLOR);
-                drawSymbol(canvas, pieceX, pieceY, "C", Color.WHITE);
-            }
-            return;
-        }
-
-        for (int[] block : SHAPES[currentType][rotation]) {
-            int x = pieceX + block[0];
-            int y = pieceY + block[1];
-            if (y >= 0) drawCell(canvas, x, y, COLORS[currentType]);
+            drawCell(canvas, pieceX, pieceY, DRILL_COLOR);
+            drawSymbol(canvas, pieceX, pieceY, drillHasHit ? "?" : "V", Color.rgb(35, 35, 35));
+        } else if (specialKind == SPECIAL_BOMB) {
+            drawCell(canvas, pieceX, pieceY, BOMB_COLOR);
+            drawSymbol(canvas, pieceX, pieceY, "B", Color.WHITE);
+        } else if (specialKind == SPECIAL_COLOR_BOMB) {
+            drawCell(canvas, pieceX, pieceY, COLOR_BOMB_COLOR);
+            drawSymbol(canvas, pieceX, pieceY, "C", Color.WHITE);
+        } else if (specialKind == SPECIAL_ATOMIC) {
+            drawCell(canvas, pieceX, pieceY, ATOMIC_COLOR);
+            drawSymbol(canvas, pieceX, pieceY, "A", Color.rgb(20, 35, 20));
         }
     }
 
@@ -806,13 +820,16 @@ public class TetrisView extends View {
 
             if (specialKind == SPECIAL_DRILL) {
                 paint.setColor(DRILL_COLOR);
-                canvas.drawText("PERFORATORE 1 x 1", getWidth() / 2f, top - dp(6), paint);
+                canvas.drawText("PERFORATORE 1x1 - MOVIMENTO CASUALE", getWidth() / 2f, top - dp(6), paint);
             } else if (specialKind == SPECIAL_BOMB) {
                 paint.setColor(BOMB_COLOR);
-                canvas.drawText("BOMBA 1 x 1 - ESPLOSIONE 3 x 3", getWidth() / 2f, top - dp(6), paint);
-            } else {
+                canvas.drawText("BOMBA 1x1 - CONTATTO SOLO SOTTO", getWidth() / 2f, top - dp(6), paint);
+            } else if (specialKind == SPECIAL_COLOR_BOMB) {
                 paint.setColor(COLOR_BOMB_COLOR);
-                canvas.drawText("BOMBA COLORE 1 x 1 - AREA 6 x 6", getWidth() / 2f, top - dp(6), paint);
+                canvas.drawText("BOMBA COLORE 1x1 - AREA 6x6", getWidth() / 2f, top - dp(6), paint);
+            } else {
+                paint.setColor(ATOMIC_COLOR);
+                canvas.drawText("ATOMIC 1x1 - PERFORA + ESPLOSIONE 6x6", getWidth() / 2f, top - dp(6), paint);
             }
 
             paint.setFakeBoldText(false);
@@ -902,9 +919,7 @@ public class TetrisView extends View {
                     moveHorizontal(dx > 0 ? 1 : -1);
                 } else if (dy > threshold) {
                     hardDrop();
-                } else if (dy < -threshold) {
-                    rotatePiece();
-                } else {
+                } else if (specialKind == SPECIAL_NORMAL) {
                     rotatePiece();
                 }
                 return true;
