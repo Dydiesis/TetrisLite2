@@ -32,7 +32,6 @@ public class TetrisView extends View {
     private static final int BOMB_CHANCE_PERCENT = 6;
     private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
     private static final int ATOMIC_CHANCE_PERCENT = 5;
-
     private static final long BURST_DURATION_MS = 260L;
 
     private static final int[][][][] SHAPES = {
@@ -110,7 +109,6 @@ public class TetrisView extends View {
     private int pieceY;
     private int specialKind;
     private boolean gameOver;
-
     private boolean drillHasHit;
     private boolean atomicHasHit;
     private int nextPieceId = 1;
@@ -264,7 +262,6 @@ public class TetrisView extends View {
         if (specialKind == SPECIAL_NORMAL) {
             if (canPlaceNormal(pieceX + delta, pieceY, rotation)) pieceX += delta;
         } else if (specialKind == SPECIAL_DRILL) {
-            // Perforatore controllabile solo prima del primo contatto.
             if (!drillHasHit) {
                 int nx = pieceX + delta;
                 if (nx >= 0 && nx < COLS) {
@@ -276,7 +273,6 @@ public class TetrisView extends View {
                 }
             }
         } else if (specialKind == SPECIAL_ATOMIC) {
-            // ATOMIC e direzionabile finche non perfora il primo tetramino.
             if (!atomicHasHit) {
                 int nx = pieceX + delta;
                 if (nx >= 0 && nx < COLS) {
@@ -288,7 +284,7 @@ public class TetrisView extends View {
                 }
             }
         } else {
-            // Le bombe possono passare accanto ai blocchi senza esplodere.
+            // Bomba e bomba colore possono sfiorare lateralmente senza esplodere.
             int nx = pieceX + delta;
             if (specialDestinationFree(nx, pieceY)) pieceX = nx;
         }
@@ -346,7 +342,6 @@ public class TetrisView extends View {
         advanceDrillOneStep();
     }
 
-    // Dopo il primo impatto, ogni passo sceglie casualmente GIU, SINISTRA o DESTRA.
     private boolean advanceDrillOneStep() {
         if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
             clearBoardCell(pieceY, pieceX, true);
@@ -359,7 +354,7 @@ public class TetrisView extends View {
         if (!drillHasHit) {
             ny = pieceY + 1;
         } else {
-            int direction = random.nextInt(3);
+            int direction = random.nextInt(3); // giu, sinistra, destra
             if (direction == 0) {
                 ny = pieceY + 1;
             } else if (direction == 1) {
@@ -397,7 +392,7 @@ public class TetrisView extends View {
     private void stepBottomBomb(boolean colorBomb) {
         int[] contact = findBottomContact();
         if (contact != null) {
-            if (colorBomb) explodeColor6x6(contact[0], contact[1]);
+            if (colorBomb) explodeAllOfTouchedColor(contact[0], contact[1]);
             else explodeArea3x3(contact[0], contact[1]);
             spawnPiece();
             return;
@@ -413,7 +408,7 @@ public class TetrisView extends View {
         if (nextY < 0 || board[nextY][pieceX] == 0) {
             pieceY = nextY;
         } else {
-            if (colorBomb) explodeColor6x6(pieceX, nextY);
+            if (colorBomb) explodeAllOfTouchedColor(pieceX, nextY);
             else explodeArea3x3(pieceX, nextY);
             spawnPiece();
         }
@@ -423,7 +418,7 @@ public class TetrisView extends View {
         while (specialKind == (colorBomb ? SPECIAL_COLOR_BOMB : SPECIAL_BOMB)) {
             int[] contact = findBottomContact();
             if (contact != null) {
-                if (colorBomb) explodeColor6x6(contact[0], contact[1]);
+                if (colorBomb) explodeAllOfTouchedColor(contact[0], contact[1]);
                 else explodeArea3x3(contact[0], contact[1]);
                 spawnPiece();
                 return;
@@ -460,34 +455,23 @@ public class TetrisView extends View {
         score += 40 + removed * 12;
     }
 
-    private void explodeColor6x6(int contactCol, int contactRow) {
+    // La bomba colore usa il colore del blocco toccato e cancella QUEL COLORE
+    // nell'intero livello, non solo in una finestra locale.
+    private void explodeAllOfTouchedColor(int contactCol, int contactRow) {
         int targetColor = board[contactRow][contactCol];
         if (targetColor == 0) return;
-
-        int startCol = clampWindowStart(contactCol - 2, COLS, 6);
-        int startRow = clampWindowStart(contactRow - 2, ROWS, 6);
-        int endCol = startCol + 5;
-        int endRow = startRow + 5;
-
-        Set<Integer> idsToRemove = new HashSet<>();
-        for (int r = startRow; r <= endRow; r++) {
-            for (int c = startCol; c <= endCol; c++) {
-                if (board[r][c] == targetColor && pieceIds[r][c] != 0) {
-                    idsToRemove.add(pieceIds[r][c]);
-                }
-            }
-        }
 
         int removedCells = 0;
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
-                if (idsToRemove.contains(pieceIds[r][c])) {
+                if (board[r][c] == targetColor) {
                     clearBoardCell(r, c, true);
                     removedCells++;
                 }
             }
         }
 
+        // Gli altri tetramini restano corpi rigidi e cadono solo se perdono l'appoggio.
         applyRigidTetrominoGravity();
         score += 60 + removedCells * 15;
         processCompletedLines();
@@ -499,7 +483,6 @@ public class TetrisView extends View {
         advanceAtomicOneStep();
     }
 
-    // Prima del primo impatto ATOMIC e direzionabile; dopo l'impatto resta sulla stessa colonna.
     private boolean advanceAtomicOneStep() {
         if (pieceY >= 0 && pieceY < ROWS && board[pieceY][pieceX] != 0) {
             clearBoardCell(pieceY, pieceX, true);
@@ -921,7 +904,7 @@ public class TetrisView extends View {
                 canvas.drawText("BOMBA 1x1 - CONTATTO SOLO SOTTO", getWidth() / 2f, top - dp(6), paint);
             } else if (specialKind == SPECIAL_COLOR_BOMB) {
                 paint.setColor(COLOR_BOMB_COLOR);
-                canvas.drawText("BOMBA COLORE 1x1 - AREA 6x6", getWidth() / 2f, top - dp(6), paint);
+                canvas.drawText("BOMBA COLORE - ELIMINA TUTTO IL COLORE", getWidth() / 2f, top - dp(6), paint);
             } else {
                 paint.setColor(ATOMIC_COLOR);
                 String atomicText = atomicHasHit
