@@ -28,7 +28,28 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleDebug --stacktrace 2>&1 | tee build.log
+
+      - name: Registra esito e diagnostica su GitHub
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            echo "BUILD SUCCESS" > build-status.txt
+          else
+            echo "BUILD FAILED" > build-status.txt
+          fi
+          echo "Commit: ${{ github.sha }}" >> build-status.txt
+          if [ -f build.log ]; then tail -n 100 build.log >> build-status.txt; fi
+          FILE_PATH="downloads/build-status.txt"
+          CONTENT="$(base64 -w0 build-status.txt)"
+          SHA="$(gh api "repos/${{ github.repository }}/contents/$FILE_PATH" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Aggiorna esito compilazione" -f content="$CONTENT" -f sha="$SHA" > /dev/null
+          else
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Aggiorna esito compilazione" -f content="$CONTENT" > /dev/null
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
