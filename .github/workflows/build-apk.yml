@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -36,3 +36,10 @@ jobs:
           name: TetrisLite-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Pubblica APK con link di download diretto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view tetrislite2-latest > /dev/null 2>&1 || gh release create tetrislite2-latest --target main --title "TetrisLite2 - Ultima versione" --notes "APK Android compilato automaticamente da GitHub Actions." --latest
+          gh release upload tetrislite2-latest "app/build/outputs/apk/debug/app-debug.apk#TetrisLite2.apk" --clobber
