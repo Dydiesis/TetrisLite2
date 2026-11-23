@@ -37,6 +37,19 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Salva anche l'APK pronto nel repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONTENT="$(base64 -w0 app/build/outputs/apk/debug/app-debug.apk)"
+          FILE_PATH="downloads/TetrisLite2.apk"
+          SHA="$(gh api "repos/${{ github.repository }}/contents/$FILE_PATH" --jq .sha 2>/dev/null || true)"
+          if [ -n "$SHA" ]; then
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2 v1.1" -f content="$CONTENT" -f sha="$SHA" > /dev/null
+          else
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2 v1.1" -f content="$CONTENT" > /dev/null
+          fi
+
       - name: Pubblica APK con link di download diretto
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
