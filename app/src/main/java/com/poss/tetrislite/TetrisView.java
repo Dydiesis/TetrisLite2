@@ -4,6 +4,8 @@ import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
+import android.graphics.Insets;
+import android.os.Build;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -11,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.MotionEvent;
+import android.view.WindowInsets;
 import android.view.View;
 
 import java.util.ArrayList;
@@ -125,6 +128,9 @@ public class TetrisView extends View {
     private float cellSize;
     private float boardLeft;
     private float boardTop;
+    private float safeTop;
+    private float safeBottom;
+    private float controlsTop;
     private float touchDownX;
     private float touchDownY;
 
@@ -765,6 +771,29 @@ public class TetrisView extends View {
 
     // ---------------- DISEGNO ----------------
 
+    // Android 15+ disegna edge-to-edge: escludiamo esplicitamente le barre di sistema.
+    private void updateSafeArea(float height) {
+        int top = 0;
+        int bottom = 0;
+        WindowInsets windowInsets = getRootWindowInsets();
+        if (windowInsets != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets insets = windowInsets.getInsets(
+                        WindowInsets.Type.statusBars()
+                        | WindowInsets.Type.navigationBars()
+                        | WindowInsets.Type.displayCutout());
+                top = insets.top;
+                bottom = insets.bottom;
+            } else {
+                top = windowInsets.getSystemWindowInsetTop();
+                bottom = windowInsets.getSystemWindowInsetBottom();
+            }
+        }
+        safeTop = Math.max(0f, top);
+        safeBottom = Math.max(safeTop + dp(270), height - Math.max(0, bottom));
+        controlsTop = safeBottom - dp(138);
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
@@ -772,15 +801,15 @@ public class TetrisView extends View {
 
         float width = getWidth();
         float height = getHeight();
+        updateSafeArea(height);
         float margin = dp(14);
-        float header = dp(78);
-        float controls = dp(160);
-        float usableHeight = Math.max(dp(200), height - header - controls - margin * 2);
 
-        float originalCellSize = Math.min((width - margin * 2) / COLS, usableHeight / ROWS);
-        cellSize = originalCellSize * 0.90f;
+        // La griglia si ridimensiona prima dei comandi, lasciando una zona tappabile
+        // fra la sua ultima riga e i pulsanti.
+        boardTop = safeTop + dp(80);
+        float maxBoardHeight = Math.max(dp(70), controlsTop - boardTop - dp(34));
+        cellSize = Math.min((width - margin * 2f) / COLS, maxBoardHeight / ROWS);
         boardLeft = (width - cellSize * COLS) / 2f;
-        boardTop = header;
 
         drawHeader(canvas);
         drawBoard(canvas);
@@ -793,27 +822,34 @@ public class TetrisView extends View {
 
     private void drawHeader(Canvas canvas) {
         syncBestScore();
+        float firstLine = safeTop + dp(31);
+        float secondLine = safeTop + dp(58);
+
         paint.setColor(Color.WHITE);
         paint.setTextAlign(Paint.Align.LEFT);
         paint.setTextSize(dp(22));
         paint.setFakeBoldText(true);
-        canvas.drawText("TETRIS LITE", dp(14), dp(31), paint);
+        canvas.drawText("TETRIS LITE", dp(14), firstLine, paint);
         paint.setFakeBoldText(false);
+
         paint.setTextSize(dp(13));
         paint.setColor(Color.rgb(255, 216, 92));
         paint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("RECORD " + bestScore, getWidth() - dp(14), dp(29), paint);
+        canvas.drawText("RECORD " + bestScore, getWidth() - dp(14), firstLine, paint);
+
         paint.setTextSize(dp(14));
         paint.setColor(Color.rgb(190, 197, 214));
         paint.setTextAlign(Paint.Align.LEFT);
-        canvas.drawText("PUNTI " + score, dp(14), dp(58), paint);
+        canvas.drawText("PUNTI " + score, dp(14), secondLine, paint);
         paint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText("LINEE " + lines, getWidth() / 2f, dp(58), paint);
+        canvas.drawText("LINEE " + lines, getWidth() / 2f, secondLine, paint);
         paint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("LIV " + level, getWidth() - dp(14), dp(58), paint);
+        canvas.drawText("LIV " + level, getWidth() - dp(14), secondLine, paint);
         paint.setTextAlign(Paint.Align.LEFT);
-        scoreButton.set(0, dp(36), getWidth() * 0.37f, dp(73));
-        recordButton.set(getWidth() * 0.54f, 0, getWidth(), dp(38));
+
+        // Anche le aree touch seguono lo spostamento sotto la status bar.
+        scoreButton.set(0, safeTop + dp(36), getWidth() * 0.37f, safeTop + dp(73));
+        recordButton.set(getWidth() * 0.54f, safeTop, getWidth(), safeTop + dp(38));
     }
 
     private void drawBoard(Canvas canvas) {
@@ -945,7 +981,7 @@ public class TetrisView extends View {
         float gap = dp(8);
         float side = Math.min(dp(54), (getWidth() - dp(28) - gap * 2) / 3f);
         float startX = getWidth() - dp(14) - (side * 3 + gap * 2);
-        float top = height - dp(138);
+        float top = controlsTop;
         float row2 = top + side + gap;
         rotateButton.set(startX, top, startX + side, top + side);
         dropButton.set(rotateButton.right + gap, top,
@@ -1006,20 +1042,21 @@ public class TetrisView extends View {
 
     private void drawGameOver(Canvas canvas, float width, float height) {
         paint.setColor(Color.argb(210, 8, 10, 14));
-        canvas.drawRect(0, 0, width, height, paint);
+        canvas.drawRect(0, safeTop, width, safeBottom, paint);
+        float centerY = (safeTop + safeBottom) / 2f;
 
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setColor(Color.WHITE);
         paint.setFakeBoldText(true);
         paint.setTextSize(dp(34));
-        canvas.drawText("GAME OVER", width / 2f, height / 2f - dp(18), paint);
+        canvas.drawText("GAME OVER", width / 2f, centerY - dp(18), paint);
 
         paint.setFakeBoldText(false);
         paint.setTextSize(dp(17));
         paint.setColor(Color.rgb(205, 211, 226));
-        canvas.drawText("Punti: " + score + "   Linee: " + lines, width / 2f, height / 2f + dp(18), paint);
+        canvas.drawText("Punti: " + score + "   Linee: " + lines, width / 2f, centerY + dp(18), paint);
         paint.setTextSize(dp(15));
-        canvas.drawText("Tocca per ricominciare", width / 2f, height / 2f + dp(52), paint);
+        canvas.drawText("Tocca per ricominciare", width / 2f, centerY + dp(52), paint);
         paint.setTextAlign(Paint.Align.LEFT);
     }
 
