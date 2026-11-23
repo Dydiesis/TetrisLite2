@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.WindowInsets;
 import android.view.View;
+import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -118,6 +119,10 @@ public class TetrisView extends View {
     private boolean atomicHasHit;
     private int nextPieceId = 1;
 
+    // Coda reale dei prossimi tre pezzi, comprese le bombe e i perforatori.
+    private final PiecePreview[] upcoming = new PiecePreview[3];
+    private final RectF[] previewButtons = {new RectF(), new RectF(), new RectF()};
+
     private int bestScore;
     private int recordSuppressedAtScore = -1;
     private final SharedPreferences scorePreferences;
@@ -131,16 +136,25 @@ public class TetrisView extends View {
     private float safeTop;
     private float safeBottom;
     private float controlsTop;
+    private float boardRight;
     private float touchDownX;
     private float touchDownY;
 
     private final RectF leftButton = new RectF();
-    private final RectF rotateButton = new RectF();
     private final RectF rightButton = new RectF();
-    private final RectF dropButton = new RectF();
     private final RectF downButton = new RectF();
     private final RectF scoreButton = new RectF();
     private final RectF recordButton = new RectF();
+
+    private static class PiecePreview {
+        final int type;
+        final int special;
+
+        PiecePreview(int type, int special) {
+            this.type = type;
+            this.special = special;
+        }
+    }
 
     private static class BurstCell {
         final int col;
@@ -216,42 +230,106 @@ public class TetrisView extends View {
         lines = 0;
         level = 1;
         gameOver = false;
+        for (int i = 0; i < upcoming.length; i++) upcoming[i] = createRandomPiece();
         spawnPiece();
         handler.postDelayed(tick, dropInterval());
         invalidate();
     }
 
-    private void spawnPiece() {
+    private PiecePreview createRandomPiece() {
         int roll = random.nextInt(100);
-        int limitDrill = DRILL_CHANCE_PERCENT;
-        int limitBomb = limitDrill + BOMB_CHANCE_PERCENT;
-        int limitColor = limitBomb + COLOR_BOMB_CHANCE_PERCENT;
-        int limitAtomic = limitColor + ATOMIC_CHANCE_PERCENT;
+        int special;
+        if (roll < DRILL_CHANCE_PERCENT) special = SPECIAL_DRILL;
+        else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT) special = SPECIAL_BOMB;
+        else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT + COLOR_BOMB_CHANCE_PERCENT) {
+            special = SPECIAL_COLOR_BOMB;
+        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT
+                + COLOR_BOMB_CHANCE_PERCENT + ATOMIC_CHANCE_PERCENT) {
+            special = SPECIAL_ATOMIC;
+        } else {
+            special = SPECIAL_NORMAL;
+        }
+        int type = special == SPECIAL_NORMAL ? random.nextInt(7) : 0;
+        return new PiecePreview(type, special);
+    }
 
-        if (roll < limitDrill) specialKind = SPECIAL_DRILL;
-        else if (roll < limitBomb) specialKind = SPECIAL_BOMB;
-        else if (roll < limitColor) specialKind = SPECIAL_COLOR_BOMB;
-        else if (roll < limitAtomic) specialKind = SPECIAL_ATOMIC;
-        else specialKind = SPECIAL_NORMAL;
+    private void spawnPiece() {
+        if (upcoming[0] == null) {
+            for (int i = 0; i < upcoming.length; i++) upcoming[i] = createRandomPiece();
+        }
 
+        PiecePreview next = upcoming[0];
+        for (int i = 0; i < upcoming.length - 1; i++) upcoming[i] = upcoming[i + 1];
+        upcoming[upcoming.length - 1] = createRandomPiece();
+
+        currentType = next.type;
+        specialKind = next.special;
         rotation = 0;
         drillHasHit = false;
         atomicHasHit = false;
+        pieceY = -1;
 
         if (specialKind != SPECIAL_NORMAL) {
-            currentType = 0;
             pieceX = COLS / 2;
-            pieceY = -1;
+        } else {
+            pieceX = 3;
+            if (!canPlaceNormal(pieceX, pieceY, rotation)) {
+                gameOver = true;
+                handler.removeCallbacks(tick);
+            }
+        }
+    }
+
+    private boolean fitsReplacement(PiecePreview replacement, int x, int y) {
+        if (replacement.special == SPECIAL_NORMAL) {
+            for (int[] block : SHAPES[replacement.type][0]) {
+                int col = x + block[0];
+                int row = y + block[1];
+                if (col < 0 || col >= COLS || row >= ROWS) return false;
+                if (row >= 0 && board[row][col] != 0) return false;
+            }
+            return true;
+        }
+        return x >= 0 && x < COLS && y < ROWS &&
+                (y < 0 || board[y][x] == 0);
+    }
+
+    private void swapWithPreview(int index) {
+        if (gameOver || index < 0 || index >= upcoming.length) return;
+        PiecePreview replacement = upcoming[index];
+        if (replacement == null) return;
+
+        // Mantieni la stessa altezza; cerca spazio anche nelle colonne vicine.
+        int startX;
+        if (replacement.special == SPECIAL_NORMAL) {
+            startX = specialKind == SPECIAL_NORMAL ? pieceX : pieceX - 2;
+        } else {
+            startX = specialKind == SPECIAL_NORMAL ? pieceX + 1 : pieceX;
+        }
+        int[] offsets = {0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5};
+        int selectedX = -1;
+        for (int offset : offsets) {
+            int candidateX = startX + offset;
+            if (fitsReplacement(replacement, candidateX, pieceY)) {
+                selectedX = candidateX;
+                break;
+            }
+        }
+        if (selectedX < 0) {
+            Toast.makeText(getContext(), "Spazio insufficiente per lo scambio",
+                    Toast.LENGTH_SHORT).show();
             return;
         }
 
-        currentType = random.nextInt(7);
-        pieceX = 3;
-        pieceY = -1;
-        if (!canPlaceNormal(pieceX, pieceY, rotation)) {
-            gameOver = true;
-            handler.removeCallbacks(tick);
-        }
+        upcoming[index] = new PiecePreview(currentType, specialKind);
+        currentType = replacement.type;
+        specialKind = replacement.special;
+        pieceX = selectedX;
+        rotation = 0;
+        drillHasHit = false;
+        atomicHasHit = false;
+        resetTickTimer();
+        invalidate();
     }
 
     private long dropInterval() {
@@ -791,7 +869,7 @@ public class TetrisView extends View {
         }
         safeTop = Math.max(0f, top);
         safeBottom = Math.max(safeTop + dp(270), height - Math.max(0, bottom));
-        controlsTop = safeBottom - dp(138);
+        controlsTop = safeBottom - dp(86);
     }
 
     @Override
@@ -806,13 +884,17 @@ public class TetrisView extends View {
 
         // La griglia si ridimensiona prima dei comandi, lasciando una zona tappabile
         // fra la sua ultima riga e i pulsanti.
-        boardTop = safeTop + dp(80);
-        float maxBoardHeight = Math.max(dp(70), controlsTop - boardTop - dp(34));
-        cellSize = Math.min((width - margin * 2f) / COLS, maxBoardHeight / ROWS);
-        boardLeft = (width - cellSize * COLS) / 2f;
+        boardTop = safeTop + dp(112);
+        float maxBoardHeight = Math.max(dp(70), controlsTop - boardTop - dp(26));
+        float sidebarWidth = dp(72);
+        cellSize = Math.min((width - margin - sidebarWidth) / COLS, maxBoardHeight / ROWS);
+        cellSize = Math.max(dp(7), cellSize);
+        boardRight = width - margin;
+        boardLeft = boardRight - cellSize * COLS;
 
         drawHeader(canvas);
         drawBoard(canvas);
+        drawPreviews(canvas);
         drawCurrentPiece(canvas);
         drawBurstEffects(canvas);
         drawControls(canvas, height);
@@ -822,34 +904,37 @@ public class TetrisView extends View {
 
     private void drawHeader(Canvas canvas) {
         syncBestScore();
-        float firstLine = safeTop + dp(31);
-        float secondLine = safeTop + dp(58);
+        float titleY = safeTop + dp(27);
+        float pointsY = safeTop + dp(69);
+        float statsY = safeTop + dp(95);
 
         paint.setColor(Color.WHITE);
         paint.setTextAlign(Paint.Align.LEFT);
-        paint.setTextSize(dp(22));
+        paint.setTextSize(dp(20));
         paint.setFakeBoldText(true);
-        canvas.drawText("TETRIS LITE", dp(14), firstLine, paint);
+        canvas.drawText("TETRIS LITE", dp(14), titleY, paint);
+
+        // Punti e record ben piu' leggibili della versione precedente.
+        paint.setTextSize(dp(23));
+        paint.setColor(Color.WHITE);
+        canvas.drawText("PUNTI " + score, dp(14), pointsY, paint);
+
+        paint.setTextAlign(Paint.Align.RIGHT);
+        paint.setTextSize(dp(20));
+        paint.setColor(Color.rgb(255, 216, 92));
+        canvas.drawText("RECORD " + bestScore, getWidth() - dp(14), pointsY, paint);
         paint.setFakeBoldText(false);
 
-        paint.setTextSize(dp(13));
-        paint.setColor(Color.rgb(255, 216, 92));
-        paint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("RECORD " + bestScore, getWidth() - dp(14), firstLine, paint);
-
-        paint.setTextSize(dp(14));
         paint.setColor(Color.rgb(190, 197, 214));
-        paint.setTextAlign(Paint.Align.LEFT);
-        canvas.drawText("PUNTI " + score, dp(14), secondLine, paint);
+        paint.setTextSize(dp(13));
         paint.setTextAlign(Paint.Align.CENTER);
-        canvas.drawText("LINEE " + lines, getWidth() / 2f, secondLine, paint);
+        canvas.drawText("LINEE " + lines, getWidth() * 0.50f, statsY, paint);
         paint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("LIV " + level, getWidth() - dp(14), secondLine, paint);
+        canvas.drawText("LIV " + level, getWidth() - dp(14), statsY, paint);
         paint.setTextAlign(Paint.Align.LEFT);
 
-        // Anche le aree touch seguono lo spostamento sotto la status bar.
-        scoreButton.set(0, safeTop + dp(36), getWidth() * 0.37f, safeTop + dp(73));
-        recordButton.set(getWidth() * 0.54f, safeTop, getWidth(), safeTop + dp(38));
+        scoreButton.set(0, safeTop + dp(39), getWidth() * 0.50f, safeTop + dp(83));
+        recordButton.set(getWidth() * 0.50f, safeTop + dp(39), getWidth(), safeTop + dp(83));
     }
 
     private void drawBoard(Canvas canvas) {
@@ -879,6 +964,84 @@ public class TetrisView extends View {
             canvas.drawLine(boardLeft, y, boardRight, y, paint);
         }
         paint.setStyle(Paint.Style.FILL);
+    }
+
+    // Anteprime dei tre pezzi futuri nella colonna a sinistra della griglia.
+    private void drawPreviews(Canvas canvas) {
+        float sidebar = boardLeft - dp(8);
+        float width = Math.min(dp(66), sidebar - dp(6));
+        if (width < dp(30)) return;
+        float left = boardLeft - dp(6) - width;
+        float cardHeight = dp(75);
+        float spacing = Math.min(dp(100), Math.max(dp(79),
+                (ROWS * cellSize - dp(40)) / 4f));
+
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setFakeBoldText(true);
+        paint.setTextSize(Math.min(dp(11), width * 0.23f));
+        paint.setColor(Color.rgb(191, 198, 217));
+        canvas.drawText("PROSSIMI", left + width / 2f, boardTop + dp(13), paint);
+        paint.setFakeBoldText(false);
+
+        for (int i = 0; i < upcoming.length; i++) {
+            PiecePreview next = upcoming[i];
+            if (next == null) continue;
+            float top = boardTop + dp(24) + i * spacing;
+            RectF slot = previewButtons[i];
+            slot.set(left, top, left + width, top + cardHeight);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.rgb(34, 38, 51));
+            canvas.drawRoundRect(slot, dp(10), dp(10), paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            paint.setColor(Color.rgb(85, 96, 123));
+            canvas.drawRoundRect(slot, dp(10), dp(10), paint);
+            paint.setStyle(Paint.Style.FILL);
+
+            paint.setColor(Color.rgb(193, 201, 222));
+            paint.setTextSize(dp(12));
+            paint.setTextAlign(Paint.Align.CENTER);
+            canvas.drawText("" + (i + 1), slot.centerX(), slot.top + dp(16), paint);
+
+            float unit = Math.min((slot.width() - dp(10)) / 4f, dp(11));
+            if (next.special == SPECIAL_NORMAL) {
+                int minX = 4, maxX = 0, minY = 4, maxY = 0;
+                for (int[] cell : SHAPES[next.type][0]) {
+                    minX = Math.min(minX, cell[0]);
+                    maxX = Math.max(maxX, cell[0]);
+                    minY = Math.min(minY, cell[1]);
+                    maxY = Math.max(maxY, cell[1]);
+                }
+                float baseX = slot.centerX() - (maxX - minX + 1) * unit / 2f;
+                float baseY = slot.top + dp(43) - (maxY - minY + 1) * unit / 2f;
+                paint.setColor(COLORS[next.type]);
+                for (int[] cell : SHAPES[next.type][0]) {
+                    float px = baseX + (cell[0] - minX) * unit;
+                    float py = baseY + (cell[1] - minY) * unit;
+                    canvas.drawRoundRect(px + dp(0.6f), py + dp(0.6f),
+                            px + unit - dp(0.6f), py + unit - dp(0.6f),
+                            dp(2), dp(2), paint);
+                }
+            } else {
+                int specialColor = next.special == SPECIAL_DRILL ? DRILL_COLOR :
+                        next.special == SPECIAL_BOMB ? BOMB_COLOR :
+                        next.special == SPECIAL_COLOR_BOMB ? COLOR_BOMB_COLOR : ATOMIC_COLOR;
+                String text = next.special == SPECIAL_DRILL ? "V" :
+                        next.special == SPECIAL_BOMB ? "B" :
+                        next.special == SPECIAL_COLOR_BOMB ? "C" : "A";
+                float dim = dp(24);
+                paint.setColor(specialColor);
+                canvas.drawRoundRect(slot.centerX() - dim / 2f, slot.top + dp(30),
+                        slot.centerX() + dim / 2f, slot.top + dp(30) + dim, dp(4), dp(4), paint);
+                paint.setColor(Color.rgb(16, 20, 28));
+                paint.setFakeBoldText(true);
+                paint.setTextSize(dp(15));
+                canvas.drawText(text, slot.centerX(), slot.top + dp(47), paint);
+                paint.setFakeBoldText(false);
+            }
+        }
+        paint.setTextAlign(Paint.Align.LEFT);
     }
 
     private void drawCurrentPiece(Canvas canvas) {
@@ -978,41 +1141,37 @@ public class TetrisView extends View {
     }
 
     private void drawControls(Canvas canvas, float height) {
+        // Tre sole frecce; l'ultima coincide con il bordo destro della griglia.
         float gap = dp(8);
-        float side = Math.min(dp(54), (getWidth() - dp(28) - gap * 2) / 3f);
-        float startX = getWidth() - dp(14) - (side * 3 + gap * 2);
-        float top = controlsTop;
-        float row2 = top + side + gap;
-        rotateButton.set(startX, top, startX + side, top + side);
-        dropButton.set(rotateButton.right + gap, top,
-                startX + side * 3 + gap * 2, top + side);
-        leftButton.set(startX, row2, startX + side, row2 + side);
-        downButton.set(leftButton.right + gap, row2,
-                leftButton.right + gap + side, row2 + side);
-        rightButton.set(downButton.right + gap, row2,
-                downButton.right + gap + side, row2 + side);
-        drawButton(canvas, rotateButton, "↻");
-        drawButton(canvas, dropButton, "DROP");
+        float side = Math.min(dp(56), (boardRight - boardLeft - gap * 2f) / 3f);
+        float right = boardRight;
+        float top = safeBottom - dp(15) - side;
+
+        rightButton.set(right - side, top, right, top + side);
+        downButton.set(rightButton.left - gap - side, top, rightButton.left - gap, top + side);
+        leftButton.set(downButton.left - gap - side, top, downButton.left - gap, top + side);
         drawButton(canvas, leftButton, "←");
         drawButton(canvas, downButton, "↓");
         drawButton(canvas, rightButton, "→");
+
         if (!gameOver && specialKind != SPECIAL_NORMAL) {
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTextSize(dp(11));
             paint.setFakeBoldText(true);
-            float labelY = top - dp(7);
+            float labelY = top - dp(9);
             if (specialKind == SPECIAL_DRILL) {
                 paint.setColor(DRILL_COLOR);
-                canvas.drawText("PERFORATORE", getWidth() / 2f, labelY, paint);
+                canvas.drawText("PERFORATORE", boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
             } else if (specialKind == SPECIAL_BOMB) {
                 paint.setColor(BOMB_COLOR);
-                canvas.drawText("BOMBA 2x2", getWidth() / 2f, labelY, paint);
+                canvas.drawText("BOMBA 2x2", boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
             } else if (specialKind == SPECIAL_COLOR_BOMB) {
                 paint.setColor(COLOR_BOMB_COLOR);
-                canvas.drawText("BOMBA COLORE - TETRAMINI INTERI", getWidth() / 2f, labelY, paint);
+                canvas.drawText("BOMBA COLORE - TETRAMINI INTERI",
+                        boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
             } else {
                 paint.setColor(ATOMIC_COLOR);
-                canvas.drawText("ATOMIC 4x4", getWidth() / 2f, labelY, paint);
+                canvas.drawText("ATOMIC 4x4", boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
             }
             paint.setFakeBoldText(false);
             paint.setTextAlign(Paint.Align.LEFT);
@@ -1031,7 +1190,7 @@ public class TetrisView extends View {
 
         paint.setColor(Color.WHITE);
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(label.equals("DROP") ? dp(14) : dp(28));
+        paint.setTextSize(dp(28));
         paint.setFakeBoldText(true);
         Paint.FontMetrics fm = paint.getFontMetrics();
         float baseline = rect.centerY() - (fm.ascent + fm.descent) / 2f;
@@ -1089,10 +1248,6 @@ public class TetrisView extends View {
                     moveHorizontal(-1);
                     return true;
                 }
-                if (rotateButton.contains(x, y)) {
-                    rotatePiece();
-                    return true;
-                }
                 if (rightButton.contains(x, y)) {
                     moveHorizontal(1);
                     return true;
@@ -1101,9 +1256,13 @@ public class TetrisView extends View {
                     softDropOneCell();
                     return true;
                 }
-                if (dropButton.contains(x, y)) {
-                    hardDrop();
-                    return true;
+
+                for (int i = 0; i < previewButtons.length; i++) {
+                    if (previewButtons[i].contains(x, y)
+                            && previewButtons[i].contains(touchDownX, touchDownY)) {
+                        swapWithPreview(i);
+                        return true;
+                    }
                 }
 
                 float dx = x - touchDownX;
