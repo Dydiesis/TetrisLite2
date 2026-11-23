@@ -3,6 +3,8 @@ name: Build APK
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - "downloads/**"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +30,9 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace 2>&1 | tee build.log
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --stacktrace 2>&1 | tee build.log
 
       - name: Registra esito e diagnostica su GitHub
         if: always()
@@ -66,9 +70,9 @@ jobs:
           FILE_PATH="downloads/TetrisLite2.apk"
           SHA="$(gh api "repos/${{ github.repository }}/contents/$FILE_PATH" --jq .sha 2>/dev/null || true)"
           if [ -n "$SHA" ]; then
-            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2 v1.1" -f content="$CONTENT" -f sha="$SHA" > /dev/null
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2" -f content="$CONTENT" -f sha="$SHA" > /dev/null
           else
-            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2 v1.1" -f content="$CONTENT" > /dev/null
+            gh api --method PUT "repos/${{ github.repository }}/contents/$FILE_PATH" -f message="Pubblica APK TetrisLite2" -f content="$CONTENT" > /dev/null
           fi
 
       - name: Pubblica APK con link di download diretto
