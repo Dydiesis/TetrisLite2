@@ -16,6 +16,11 @@ import android.view.MotionEvent;
 import android.view.WindowInsets;
 import android.view.View;
 import android.widget.Toast;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,14 +40,18 @@ public class TetrisView extends View {
     private static final int SPECIAL_ATOMIC = 4;
     private static final int SPECIAL_SPLASH = 5;
 
-    // I pesi 10:20:30:40:50 sommano a 150, quindi sono relativi.
-    // Meta' dei pezzi e' classica; per gli speciali, i pesi indicano la frequenza relativa.
-    private static final int SPECIAL_PIECE_CHANCE_PERCENT = 50;
-    private static final int SPLASH_WEIGHT = 10;
-    private static final int ATOMIC_WEIGHT = 20;
-    private static final int COLOR_BOMB_WEIGHT = 30;
-    private static final int BOMB_WEIGHT = 40;
-    private static final int DRILL_WEIGHT = 50;
+    // Probabilita' ASSOLUTE sul totale dei pezzi estratti.
+    // La differenza fino al 100% resta assegnata ai 7 tetramini classici.
+    private static final int[] DEFAULT_BOMB_CHANCES = {5, 10, 15, 20, 25};
+    private static final String[] BOMB_NAMES = {
+            "Bomba Splash", "Bomba atomica", "Bomba colore",
+            "Bomba normale", "Perforatore"
+    };
+    private static final String[] BOMB_PREF_KEYS = {
+            "chance_splash", "chance_atomic", "chance_color",
+            "chance_normal_bomb", "chance_drill"
+    };
+
     private static final long LONG_PRESS_MS = 480L;
     private static final long BURST_DURATION_MS = 260L;
 
@@ -133,6 +142,7 @@ public class TetrisView extends View {
     private int bestScore;
     private int recordSuppressedAtScore = -1;
     private final SharedPreferences scorePreferences;
+    private final int[] bombChances = DEFAULT_BOMB_CHANCES.clone();
     private int score;
     private int lines;
     private int level;
@@ -162,6 +172,7 @@ public class TetrisView extends View {
     private final RectF downButton = new RectF();
     private final RectF scoreButton = new RectF();
     private final RectF recordButton = new RectF();
+    private final RectF bombMenuButton = new RectF();
 
     private static class PiecePreview {
         final int type;
@@ -229,6 +240,15 @@ public class TetrisView extends View {
         super(context);
         scorePreferences = context.getSharedPreferences("tetris_lite_scores", Context.MODE_PRIVATE);
         bestScore = scorePreferences.getInt("best_score", 0);
+        int configuredTotal = 0;
+        for (int i = 0; i < bombChances.length; i++) {
+            int stored = scorePreferences.getInt(BOMB_PREF_KEYS[i], DEFAULT_BOMB_CHANCES[i]);
+            bombChances[i] = Math.max(0, Math.min(100, stored));
+            configuredTotal += bombChances[i];
+        }
+        if (configuredTotal > 100) {
+            System.arraycopy(DEFAULT_BOMB_CHANCES, 0, bombChances, 0, bombChances.length);
+        }
         setFocusable(true);
         startNewGame();
     }
@@ -256,20 +276,19 @@ public class TetrisView extends View {
     }
 
     private PiecePreview createRandomPiece() {
-        int special = SPECIAL_NORMAL;
-        if (random.nextInt(100) < SPECIAL_PIECE_CHANCE_PERCENT) {
-            int roll = random.nextInt(SPLASH_WEIGHT + ATOMIC_WEIGHT
-                    + COLOR_BOMB_WEIGHT + BOMB_WEIGHT + DRILL_WEIGHT);
-            if (roll < SPLASH_WEIGHT) special = SPECIAL_SPLASH;
-            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT) special = SPECIAL_ATOMIC;
-            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT + COLOR_BOMB_WEIGHT)
-                special = SPECIAL_COLOR_BOMB;
-            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT
-                    + COLOR_BOMB_WEIGHT + BOMB_WEIGHT) special = SPECIAL_BOMB;
-            else special = SPECIAL_DRILL;
+        // Un unico tiro 0..99: le percentuali impostate sono reali,
+        // non pesi relativi. Il residuo produce pezzi classici.
+        int roll = random.nextInt(100);
+        int cutoff = 0;
+        final int[] types = {
+                SPECIAL_SPLASH, SPECIAL_ATOMIC, SPECIAL_COLOR_BOMB,
+                SPECIAL_BOMB, SPECIAL_DRILL
+        };
+        for (int i = 0; i < bombChances.length; i++) {
+            cutoff += bombChances[i];
+            if (roll < cutoff) return new PiecePreview(0, types[i]);
         }
-        int type = special == SPECIAL_NORMAL ? random.nextInt(7) : 0;
-        return new PiecePreview(type, special);
+        return new PiecePreview(random.nextInt(7), SPECIAL_NORMAL);
     }
 
     private void spawnPiece() {
@@ -901,6 +920,127 @@ public class TetrisView extends View {
         }
     }
 
+    private void showBombSettings() {
+        // Il gioco non continua a scorrere mentre si regolano le percentuali.
+        handler.removeCallbacks(tick);
+
+        LinearLayout layout = new LinearLayout(getContext());
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding((int) dp(18), (int) dp(10), (int) dp(18), (int) dp(14));
+
+        TextView hint = new TextView(getContext());
+        hint.setText("Percentuale sul totale dei pezzi che compaiono. "
+                + "La somma non deve superare il 100%.");
+        hint.setTextSize(14f);
+        hint.setPadding(0, 0, 0, (int) dp(12));
+        layout.addView(hint);
+
+        final SeekBar[] sliders = new SeekBar[bombChances.length];
+        final TextView[] itemLabels = new TextView[bombChances.length];
+
+        for (int i = 0; i < bombChances.length; i++) {
+            TextView label = new TextView(getContext());
+            label.setTextSize(16f);
+            label.setText(BOMB_NAMES[i] + ": " + bombChances[i] + "%");
+            label.setPadding(0, (int) dp(7), 0, 0);
+            layout.addView(label);
+            itemLabels[i] = label;
+
+            SeekBar bar = new SeekBar(getContext());
+            bar.setMax(100);
+            bar.setProgress(bombChances[i]);
+            layout.addView(bar);
+            sliders[i] = bar;
+        }
+
+        TextView totals = new TextView(getContext());
+        totals.setTextSize(15f);
+        totals.setPadding(0, (int) dp(12), 0, (int) dp(8));
+        layout.addView(totals);
+
+        Button defaults = new Button(getContext());
+        defaults.setText("RIPRISTINA 5 / 10 / 15 / 20 / 25");
+        layout.addView(defaults);
+
+        ScrollView scrolling = new ScrollView(getContext());
+        scrolling.setFillViewport(false);
+        scrolling.addView(layout);
+
+        AlertDialog dialog = new AlertDialog.Builder(getContext())
+                .setTitle("Percentuali bombe")
+                .setView(scrolling)
+                .setNegativeButton("ANNULLA", null)
+                .setPositiveButton("SALVA", null)
+                .create();
+
+        final Runnable refresh = () -> {
+            int total = 0;
+            for (int i = 0; i < sliders.length; i++) {
+                int percent = sliders[i].getProgress();
+                total += percent;
+                itemLabels[i].setText(BOMB_NAMES[i] + ": " + percent + "%");
+            }
+            int classics = 100 - total;
+            if (classics >= 0) {
+                totals.setText("Totale bombe: " + total
+                        + "%    Tetramini classici: " + classics + "%");
+                totals.setTextColor(Color.rgb(89, 220, 132));
+            } else {
+                totals.setText("Totale bombe: " + total
+                        + "%    Riduci di " + (-classics) + "% per salvare.");
+                totals.setTextColor(Color.rgb(255, 115, 115));
+            }
+            Button saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            if (saveButton != null) saveButton.setEnabled(total <= 100);
+        };
+
+        for (SeekBar bar : sliders) {
+            bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    refresh.run();
+                }
+
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {}
+
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+
+        defaults.setOnClickListener(v -> {
+            for (int i = 0; i < sliders.length; i++) {
+                sliders[i].setProgress(DEFAULT_BOMB_CHANCES[i]);
+            }
+            refresh.run();
+        });
+
+        dialog.setOnShowListener(d -> {
+            refresh.run();
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                int total = 0;
+                for (SeekBar slider : sliders) total += slider.getProgress();
+                if (total > 100) return;
+                SharedPreferences.Editor edit = scorePreferences.edit();
+                for (int i = 0; i < bombChances.length; i++) {
+                    bombChances[i] = sliders[i].getProgress();
+                    edit.putInt(BOMB_PREF_KEYS[i], bombChances[i]);
+                }
+                edit.apply();
+
+                // Aggiorna le 3 anteprime al nuovo profilo; il pezzo attuale resta.
+                for (int i = 0; i < upcoming.length; i++) {
+                    upcoming[i] = createRandomPiece();
+                }
+                invalidate();
+                dialog.dismiss();
+            });
+        });
+        dialog.setOnDismissListener(d -> resetTickTimer());
+        dialog.show();
+    }
+
     private void confirmResetRecord() {
         new AlertDialog.Builder(getContext())
                 .setTitle("Azzerare il record?")
@@ -990,6 +1130,11 @@ public class TetrisView extends View {
         paint.setTextSize(dp(20));
         paint.setFakeBoldText(true);
         canvas.drawText("TETRIS LITE", dp(14), titleY, paint);
+        paint.setTextAlign(Paint.Align.RIGHT);
+        paint.setTextSize(dp(18));
+        paint.setColor(Color.rgb(125, 207, 255));
+        canvas.drawText("BOMBE ⚙", getWidth() - dp(14), titleY, paint);
+        paint.setTextAlign(Paint.Align.LEFT);
 
         // Punti e record ben piu' leggibili della versione precedente.
         paint.setTextSize(dp(23));
@@ -1012,6 +1157,8 @@ public class TetrisView extends View {
 
         scoreButton.set(0, safeTop + dp(39), getWidth() * 0.50f, safeTop + dp(83));
         recordButton.set(getWidth() * 0.50f, safeTop + dp(39), getWidth(), safeTop + dp(83));
+        bombMenuButton.set(getWidth() * 0.63f, safeTop,
+                getWidth(), safeTop + dp(40));
     }
 
     private void drawBoard(Canvas canvas) {
@@ -1396,6 +1543,11 @@ public class TetrisView extends View {
 
             float x = event.getX();
             float y = event.getY();
+            if (bombMenuButton.contains(x, y)
+                    && bombMenuButton.contains(touchDownX, touchDownY)) {
+                showBombSettings();
+                return true;
+            }
             if (recordButton.contains(x, y)) {
                 confirmResetRecord();
                 return true;
