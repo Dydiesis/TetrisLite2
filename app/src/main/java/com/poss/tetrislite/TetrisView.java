@@ -33,11 +33,17 @@ public class TetrisView extends View {
     private static final int SPECIAL_BOMB = 2;
     private static final int SPECIAL_COLOR_BOMB = 3;
     private static final int SPECIAL_ATOMIC = 4;
+    private static final int SPECIAL_SPLASH = 5;
 
-    private static final int DRILL_CHANCE_PERCENT = 9;
-    private static final int BOMB_CHANCE_PERCENT = 6;
-    private static final int COLOR_BOMB_CHANCE_PERCENT = 6;
-    private static final int ATOMIC_CHANCE_PERCENT = 5;
+    // I pesi 10:20:30:40:50 sommano a 150, quindi sono relativi.
+    // Meta' dei pezzi e' classica; per gli speciali, i pesi indicano la frequenza relativa.
+    private static final int SPECIAL_PIECE_CHANCE_PERCENT = 50;
+    private static final int SPLASH_WEIGHT = 10;
+    private static final int ATOMIC_WEIGHT = 20;
+    private static final int COLOR_BOMB_WEIGHT = 30;
+    private static final int BOMB_WEIGHT = 40;
+    private static final int DRILL_WEIGHT = 50;
+    private static final long LONG_PRESS_MS = 480L;
     private static final long BURST_DURATION_MS = 260L;
 
     private static final int[][][][] SHAPES = {
@@ -99,6 +105,7 @@ public class TetrisView extends View {
     private static final int BOMB_COLOR = Color.rgb(255, 67, 54);
     private static final int COLOR_BOMB_COLOR = Color.rgb(115, 210, 255);
     private static final int ATOMIC_COLOR = Color.rgb(104, 255, 128);
+    private static final int SPLASH_COLOR = Color.rgb(94, 148, 255);
 
     // board = colore 1..7; pieceIds = identita del tetramino classico.
     private final int[][] board = new int[ROWS][COLS];
@@ -139,6 +146,16 @@ public class TetrisView extends View {
     private float boardRight;
     private float touchDownX;
     private float touchDownY;
+    private int heldArrowDirection;
+    private boolean arrowLongPressed;
+    private final Runnable arrowLongPress = new Runnable() {
+        @Override
+        public void run() {
+            if (heldArrowDirection == 0 || gameOver) return;
+            arrowLongPressed = true;
+            moveToHorizontalEdge(heldArrowDirection);
+        }
+    };
 
     private final RectF leftButton = new RectF();
     private final RectF rightButton = new RectF();
@@ -195,6 +212,8 @@ public class TetrisView extends View {
                 stepBottomBomb(true);
             } else if (specialKind == SPECIAL_ATOMIC) {
                 stepAtomic();
+            } else if (specialKind == SPECIAL_SPLASH) {
+                stepSplash();
             } else if (canPlaceNormal(pieceX, pieceY + 1, rotation)) {
                 pieceY++;
             } else {
@@ -237,17 +256,17 @@ public class TetrisView extends View {
     }
 
     private PiecePreview createRandomPiece() {
-        int roll = random.nextInt(100);
-        int special;
-        if (roll < DRILL_CHANCE_PERCENT) special = SPECIAL_DRILL;
-        else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT) special = SPECIAL_BOMB;
-        else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT + COLOR_BOMB_CHANCE_PERCENT) {
-            special = SPECIAL_COLOR_BOMB;
-        } else if (roll < DRILL_CHANCE_PERCENT + BOMB_CHANCE_PERCENT
-                + COLOR_BOMB_CHANCE_PERCENT + ATOMIC_CHANCE_PERCENT) {
-            special = SPECIAL_ATOMIC;
-        } else {
-            special = SPECIAL_NORMAL;
+        int special = SPECIAL_NORMAL;
+        if (random.nextInt(100) < SPECIAL_PIECE_CHANCE_PERCENT) {
+            int roll = random.nextInt(SPLASH_WEIGHT + ATOMIC_WEIGHT
+                    + COLOR_BOMB_WEIGHT + BOMB_WEIGHT + DRILL_WEIGHT);
+            if (roll < SPLASH_WEIGHT) special = SPECIAL_SPLASH;
+            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT) special = SPECIAL_ATOMIC;
+            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT + COLOR_BOMB_WEIGHT)
+                special = SPECIAL_COLOR_BOMB;
+            else if (roll < SPLASH_WEIGHT + ATOMIC_WEIGHT
+                    + COLOR_BOMB_WEIGHT + BOMB_WEIGHT) special = SPECIAL_BOMB;
+            else special = SPECIAL_DRILL;
         }
         int type = special == SPECIAL_NORMAL ? random.nextInt(7) : 0;
         return new PiecePreview(type, special);
@@ -291,7 +310,7 @@ public class TetrisView extends View {
             return true;
         }
         return x >= 0 && x < COLS && y < ROWS &&
-                (y < 0 || board[y][x] == 0);
+                (replacement.special == SPECIAL_SPLASH || y < 0 || board[y][x] == 0);
     }
 
     private void swapWithPreview(int index) {
@@ -378,12 +397,24 @@ public class TetrisView extends View {
                     }
                 }
             }
+        } else if (specialKind == SPECIAL_SPLASH) {
+            // Splash attraversa i blocchi anche durante lo spostamento orizzontale.
+            pieceX = Math.max(0, Math.min(COLS - 1, pieceX + delta));
         } else {
-            // Bomba e bomba colore possono sfiorare lateralmente senza esplodere.
+            // Bomba e bomba colore non esplodono per il contatto laterale.
             int nx = pieceX + delta;
             if (specialDestinationFree(nx, pieceY)) pieceX = nx;
         }
         invalidate();
+    }
+
+    private void moveToHorizontalEdge(int direction) {
+        // La pressione prolungata sposta fino al bordo o al primo ostacolo reale.
+        for (int i = 0; i < COLS; i++) {
+            int previousX = pieceX;
+            moveHorizontal(direction);
+            if (pieceX == previousX) break;
+        }
     }
 
     private void rotatePiece() {
@@ -424,6 +455,10 @@ public class TetrisView extends View {
         } else if (specialKind == SPECIAL_ATOMIC) {
             while (specialKind == SPECIAL_ATOMIC) {
                 if (advanceAtomicOneStep()) break;
+            }
+        } else if (specialKind == SPECIAL_SPLASH) {
+            while (specialKind == SPECIAL_SPLASH) {
+                if (advanceSplashOneStep()) break;
             }
         }
 
@@ -576,9 +611,9 @@ public class TetrisView extends View {
                 }
             }
         }
-        applyRigidTetrominoGravity();
+        // La bomba colore lascia ogni altro quadratino esattamente dov'era:
+        // niente gravita' e nessun ricompattamento.
         score += 60 + removedCells * 15;
-        processCompletedLines();
     }
 
     // ---------------- ATOMIC ----------------
@@ -622,6 +657,46 @@ public class TetrisView extends View {
             }
         }
         score += removed * 12;
+    }
+
+    // Splash: attraversa la griglia senza danneggiare i blocchi; al fondo,
+    // spezza ogni tetramino in quadratini e fa precipitare i singoli quadratini
+    // di ogni colonna, riempiendo tutti i buchi verticali.
+    private void stepSplash() {
+        advanceSplashOneStep();
+    }
+
+    private boolean advanceSplashOneStep() {
+        if (pieceY < ROWS - 1) {
+            pieceY++;
+            return false;
+        }
+
+        int moved = 0;
+        for (int c = 0; c < COLS; c++) {
+            int writeRow = ROWS - 1;
+            for (int r = ROWS - 1; r >= 0; r--) {
+                int value = board[r][c];
+                if (value == 0) continue;
+                if (writeRow != r) {
+                    addBurst(c, r, COLORS[value - 1]);
+                    board[writeRow][c] = value;
+                    board[r][c] = 0;
+                    moved++;
+                }
+                pieceIds[writeRow][c] = 0;
+                pieceIds[r][c] = 0;
+                writeRow--;
+            }
+            for (int r = writeRow; r >= 0; r--) {
+                board[r][c] = 0;
+                pieceIds[r][c] = 0;
+            }
+        }
+        score += 100 + moved * 3;
+        processCompletedLines();
+        spawnPiece();
+        return true;
     }
 
     private int clampWindowStart(int desired, int total, int window) {
@@ -812,6 +887,7 @@ public class TetrisView extends View {
             else lockPiece();
         } else if (specialKind == SPECIAL_DRILL) stepDrill();
         else if (specialKind == SPECIAL_ATOMIC) stepAtomic();
+        else if (specialKind == SPECIAL_SPLASH) stepSplash();
         else if (specialKind == SPECIAL_BOMB) stepBottomBomb(false);
         else if (specialKind == SPECIAL_COLOR_BOMB) stepBottomBomb(true);
         resetTickTimer();
@@ -895,6 +971,7 @@ public class TetrisView extends View {
         drawHeader(canvas);
         drawBoard(canvas);
         drawPreviews(canvas);
+        drawLandingGhost(canvas);
         drawCurrentPiece(canvas);
         drawBurstEffects(canvas);
         drawControls(canvas, height);
@@ -1026,10 +1103,12 @@ public class TetrisView extends View {
             } else {
                 int specialColor = next.special == SPECIAL_DRILL ? DRILL_COLOR :
                         next.special == SPECIAL_BOMB ? BOMB_COLOR :
-                        next.special == SPECIAL_COLOR_BOMB ? COLOR_BOMB_COLOR : ATOMIC_COLOR;
+                        next.special == SPECIAL_COLOR_BOMB ? COLOR_BOMB_COLOR :
+                        next.special == SPECIAL_SPLASH ? SPLASH_COLOR : ATOMIC_COLOR;
                 String text = next.special == SPECIAL_DRILL ? "V" :
                         next.special == SPECIAL_BOMB ? "B" :
-                        next.special == SPECIAL_COLOR_BOMB ? "C" : "A";
+                        next.special == SPECIAL_COLOR_BOMB ? "C" :
+                        next.special == SPECIAL_SPLASH ? "S" : "A";
                 float dim = dp(24);
                 paint.setColor(specialColor);
                 canvas.drawRoundRect(slot.centerX() - dim / 2f, slot.top + dp(30),
@@ -1042,6 +1121,49 @@ public class TetrisView extends View {
             }
         }
         paint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    // Ombra del punto di appoggio prevista per i tetramini classici.
+    // Per le bombe/perforatore a traiettoria speciale non mostra una posizione
+    // potenzialmente fuorviante; per Splash indica il fondo della colonna.
+    private void drawLandingGhost(Canvas canvas) {
+        if (gameOver) return;
+        if (specialKind == SPECIAL_SPLASH) {
+            float inset = cellSize * 0.13f;
+            float l = boardLeft + pieceX * cellSize + inset;
+            float t = boardTop + (ROWS - 1) * cellSize + inset;
+            paint.setColor(Color.argb(145, Color.red(SPLASH_COLOR),
+                    Color.green(SPLASH_COLOR), Color.blue(SPLASH_COLOR)));
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            canvas.drawRoundRect(l, t, l + cellSize - inset * 2,
+                    t + cellSize - inset * 2, dp(3), dp(3), paint);
+            paint.setStyle(Paint.Style.FILL);
+            return;
+        }
+        if (specialKind != SPECIAL_NORMAL) return;
+        int landingY = pieceY;
+        while (canPlaceNormal(pieceX, landingY + 1, rotation)) {
+            landingY++;
+        }
+        if (landingY == pieceY) return;
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(Math.max(dp(1.5f), cellSize * 0.07f));
+        int baseColor = COLORS[currentType];
+        paint.setColor(Color.argb(155, Color.red(baseColor),
+                Color.green(baseColor), Color.blue(baseColor)));
+        float inset = Math.max(dp(2), cellSize * 0.12f);
+        for (int[] block : SHAPES[currentType][rotation]) {
+            int x = pieceX + block[0];
+            int y = landingY + block[1];
+            if (y < 0 || y >= ROWS || x < 0 || x >= COLS) continue;
+            float l = boardLeft + x * cellSize + inset;
+            float t = boardTop + y * cellSize + inset;
+            canvas.drawRoundRect(l, t, l + cellSize - inset * 2,
+                    t + cellSize - inset * 2, dp(3), dp(3), paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private void drawCurrentPiece(Canvas canvas) {
@@ -1070,6 +1192,9 @@ public class TetrisView extends View {
         } else if (specialKind == SPECIAL_ATOMIC) {
             drawCell(canvas, pieceX, pieceY, ATOMIC_COLOR);
             drawSymbol(canvas, pieceX, pieceY, atomicHasHit ? "A" : "↔", Color.rgb(20, 35, 20));
+        } else if (specialKind == SPECIAL_SPLASH) {
+            drawCell(canvas, pieceX, pieceY, SPLASH_COLOR);
+            drawSymbol(canvas, pieceX, pieceY, "S", Color.WHITE);
         }
     }
 
@@ -1169,6 +1294,9 @@ public class TetrisView extends View {
                 paint.setColor(COLOR_BOMB_COLOR);
                 canvas.drawText("BOMBA COLORE - TETRAMINI INTERI",
                         boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
+            } else if (specialKind == SPECIAL_SPLASH) {
+                paint.setColor(SPLASH_COLOR);
+                canvas.drawText("SPLASH - COMPATTA I BLOCCHI", boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
             } else {
                 paint.setColor(ATOMIC_COLOR);
                 canvas.drawText("ATOMIC 4x4", boardLeft + (boardRight - boardLeft) / 2f, labelY, paint);
@@ -1221,62 +1349,104 @@ public class TetrisView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                touchDownX = event.getX();
-                touchDownY = event.getY();
+        int action = event.getActionMasked();
+
+        if (action == MotionEvent.ACTION_DOWN) {
+            touchDownX = event.getX();
+            touchDownY = event.getY();
+            arrowLongPressed = false;
+            heldArrowDirection = 0;
+            handler.removeCallbacks(arrowLongPress);
+            if (!gameOver && leftButton.contains(touchDownX, touchDownY)) {
+                heldArrowDirection = -1;
+                handler.postDelayed(arrowLongPress, LONG_PRESS_MS);
+            } else if (!gameOver && rightButton.contains(touchDownX, touchDownY)) {
+                heldArrowDirection = 1;
+                handler.postDelayed(arrowLongPress, LONG_PRESS_MS);
+            }
+            return true;
+        }
+
+        if (action == MotionEvent.ACTION_MOVE) {
+            if (heldArrowDirection != 0) {
+                RectF button = heldArrowDirection < 0 ? leftButton : rightButton;
+                if (!button.contains(event.getX(), event.getY())) {
+                    handler.removeCallbacks(arrowLongPress);
+                    heldArrowDirection = 0;
+                }
+            }
+            return true;
+        }
+
+        if (action == MotionEvent.ACTION_CANCEL) {
+            handler.removeCallbacks(arrowLongPress);
+            heldArrowDirection = 0;
+            arrowLongPressed = false;
+            return true;
+        }
+
+        if (action == MotionEvent.ACTION_UP) {
+            handler.removeCallbacks(arrowLongPress);
+            int pendingDirection = heldArrowDirection;
+            heldArrowDirection = 0;
+            if (arrowLongPressed) {
+                arrowLongPressed = false;
                 return true;
+            }
 
-            case MotionEvent.ACTION_UP:
-                float x = event.getX();
-                float y = event.getY();
-
-                if (recordButton.contains(x, y)) {
-                    confirmResetRecord();
-                    return true;
-                }
-                if (scoreButton.contains(x, y)) {
-                    confirmResetGame();
-                    return true;
-                }
-                if (gameOver) {
-                    startNewGame();
-                    return true;
-                }
-
-                if (leftButton.contains(x, y)) {
-                    moveHorizontal(-1);
-                    return true;
-                }
-                if (rightButton.contains(x, y)) {
-                    moveHorizontal(1);
-                    return true;
-                }
-                if (downButton.contains(x, y)) {
-                    softDropOneCell();
-                    return true;
-                }
-
-                for (int i = 0; i < previewButtons.length; i++) {
-                    if (previewButtons[i].contains(x, y)
-                            && previewButtons[i].contains(touchDownX, touchDownY)) {
-                        swapWithPreview(i);
-                        return true;
-                    }
-                }
-
-                float dx = x - touchDownX;
-                float dy = y - touchDownY;
-                float threshold = dp(34);
-
-                if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy)) {
-                    moveHorizontal(dx > 0 ? 1 : -1);
-                } else if (dy > threshold) {
-                    hardDrop();
-                } else if (specialKind == SPECIAL_NORMAL) {
-                    rotatePiece();
-                }
+            float x = event.getX();
+            float y = event.getY();
+            if (recordButton.contains(x, y)) {
+                confirmResetRecord();
                 return true;
+            }
+            if (scoreButton.contains(x, y)) {
+                confirmResetGame();
+                return true;
+            }
+            if (gameOver) {
+                startNewGame();
+                return true;
+            }
+
+            if (pendingDirection != 0) {
+                RectF button = pendingDirection < 0 ? leftButton : rightButton;
+                if (button.contains(x, y)) {
+                    moveHorizontal(pendingDirection);
+                    return true;
+                }
+            }
+            if (leftButton.contains(x, y) && leftButton.contains(touchDownX, touchDownY)) {
+                moveHorizontal(-1);
+                return true;
+            }
+            if (rightButton.contains(x, y) && rightButton.contains(touchDownX, touchDownY)) {
+                moveHorizontal(1);
+                return true;
+            }
+            if (downButton.contains(x, y) && downButton.contains(touchDownX, touchDownY)) {
+                softDropOneCell();
+                return true;
+            }
+            for (int i = 0; i < previewButtons.length; i++) {
+                if (previewButtons[i].contains(x, y)
+                        && previewButtons[i].contains(touchDownX, touchDownY)) {
+                    swapWithPreview(i);
+                    return true;
+                }
+            }
+
+            float dx = x - touchDownX;
+            float dy = y - touchDownY;
+            float threshold = dp(34);
+            if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy)) {
+                moveHorizontal(dx > 0 ? 1 : -1);
+            } else if (dy > threshold) {
+                hardDrop();
+            } else if (specialKind == SPECIAL_NORMAL) {
+                rotatePiece();
+            }
+            return true;
         }
         return super.onTouchEvent(event);
     }
@@ -1289,6 +1459,7 @@ public class TetrisView extends View {
     protected void onDetachedFromWindow() {
         handler.removeCallbacks(tick);
         handler.removeCallbacks(burstAnimator);
+        handler.removeCallbacks(arrowLongPress);
         super.onDetachedFromWindow();
     }
 }
